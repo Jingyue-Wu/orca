@@ -16,6 +16,8 @@ import RightSidebar from './components/right-sidebar'
 import QuickOpen from './components/QuickOpen'
 import { useGitStatusPolling } from './components/right-sidebar/useGitStatusPolling'
 
+const isMac = navigator.userAgent.includes('Mac')
+
 function isEditableTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) {
     return false
@@ -71,6 +73,7 @@ function App(): React.JSX.Element {
   const setRightSidebarOpen = useAppStore((s) => s.setRightSidebarOpen)
   const setRightSidebarTab = useAppStore((s) => s.setRightSidebarTab)
   const setQuickOpenVisible = useAppStore((s) => s.setQuickOpenVisible)
+  const isFullScreen = useAppStore((s) => s.isFullScreen)
 
   // Subscribe to IPC push events
   useIpcEvents()
@@ -279,7 +282,7 @@ function App(): React.JSX.Element {
         return
       }
       // Accept Cmd on macOS, Ctrl on other platforms
-      const mod = navigator.userAgent.includes('Mac') ? e.metaKey : e.ctrlKey
+      const mod = isMac ? e.metaKey : e.ctrlKey
       if (!mod) {
         return
       }
@@ -346,7 +349,7 @@ function App(): React.JSX.Element {
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden">
       <div className="titlebar">
-        <div className="titlebar-traffic-light-pad" />
+        <div className={isMac && !isFullScreen ? 'titlebar-traffic-light-pad' : 'pl-2'} />
         <button
           className="sidebar-toggle"
           onClick={toggleSidebar}
@@ -370,12 +373,11 @@ function App(): React.JSX.Element {
           </button>
         )}
         <button
-          className="sidebar-toggle"
+          className="sidebar-toggle mr-2"
           onClick={toggleRightSidebar}
           title="Toggle right sidebar"
           aria-label="Toggle right sidebar"
           disabled={!showSidebar}
-          style={{ marginRight: 12 }}
         >
           <PanelRight size={16} />
         </button>
