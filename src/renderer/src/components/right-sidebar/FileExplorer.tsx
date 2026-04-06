@@ -1,17 +1,13 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { FilePlus, FolderPlus, Loader2 } from 'lucide-react'
+import { Loader2 } from 'lucide-react'
 import { useAppStore } from '@/store'
 import { detectLanguage } from '@/lib/language-detect'
 import { dirname, normalizeRelativePath } from '@/lib/path'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger
-} from '@/components/ui/dropdown-menu'
+import { cn } from '@/lib/utils'
 import { FileDeleteDialog } from './FileDeleteDialog'
+import { FileExplorerBackgroundMenu } from './FileExplorerBackgroundMenu'
 import { FileExplorerRow, InlineInputRow } from './FileExplorerRow'
 import type { TreeNode } from './file-explorer-types'
 import { splitPathSegments } from './path-tree'
@@ -20,6 +16,8 @@ import { useFileDeletion } from './useFileDeletion'
 import { useFileExplorerReveal } from './useFileExplorerReveal'
 import { useFileExplorerInlineInput } from './useFileExplorerInlineInput'
 import { useFileExplorerKeys } from './useFileExplorerKeys'
+import { useActiveWorktreePath } from './useActiveWorktreePath'
+import { useFileExplorerDragDrop } from './useFileExplorerDragDrop'
 import { useFileExplorerTree } from './useFileExplorerTree'
 
 export default function FileExplorer(): React.JSX.Element {
@@ -36,18 +34,7 @@ export default function FileExplorer(): React.JSX.Element {
   const openFiles = useAppStore((s) => s.openFiles)
   const closeFile = useAppStore((s) => s.closeFile)
 
-  const worktreePath = useMemo(() => {
-    if (!activeWorktreeId) {
-      return null
-    }
-    for (const worktrees of Object.values(worktreesByRepo)) {
-      const wt = worktrees.find((w) => w.id === activeWorktreeId)
-      if (wt) {
-        return wt.path
-      }
-    }
-    return null
-  }, [activeWorktreeId, worktreesByRepo])
+  const worktreePath = useActiveWorktreePath(activeWorktreeId, worktreesByRepo)
 
   const expanded = useMemo(
     () =>
@@ -60,6 +47,7 @@ export default function FileExplorer(): React.JSX.Element {
     flatRows,
     rowsByPath,
     rootCache,
+    rootError,
     loadDir,
     refreshTree,
     refreshDir,
@@ -107,6 +95,25 @@ export default function FileExplorer(): React.JSX.Element {
     setSelectedPath,
     isMac,
     isWindows
+  })
+
+  const {
+    handleMoveDrop,
+    handleDragExpandDir,
+    dropTargetDir,
+    setDropTargetDir,
+    dragSourcePath,
+    setDragSourcePath,
+    isRootDragOver,
+    stopDragEdgeScroll,
+    rootDragHandlers
+  } = useFileExplorerDragDrop({
+    worktreePath,
+    activeWorktreeId,
+    expanded,
+    toggleDir,
+    refreshDir,
+    scrollRef
   })
 
   useEffect(() => {
@@ -182,6 +189,12 @@ export default function FileExplorer(): React.JSX.Element {
     virtualizer
   })
 
+  useEffect(() => {
+    if (inlineInputIndex >= 0) {
+      virtualizer.scrollToIndex(inlineInputIndex, { align: 'auto' })
+    }
+  }, [inlineInputIndex, virtualizer])
+
   const selectedNode = selectedPath ? (rowsByPath.get(selectedPath) ?? null) : null
   useFileExplorerKeys({
     containerRef: scrollRef,
@@ -255,6 +268,13 @@ export default function FileExplorer(): React.JSX.Element {
         </div>
       )
     }
+    if (rootError) {
+      return (
+        <div className="flex h-full items-center justify-center px-4 text-center text-[11px] text-muted-foreground">
+          Could not load files for this worktree: {rootError}
+        </div>
+      )
+    }
     return (
       <div className="flex h-full items-center justify-center text-[11px] text-muted-foreground px-4 text-center">
         No files in this worktree
@@ -265,10 +285,23 @@ export default function FileExplorer(): React.JSX.Element {
   return (
     <>
       <ScrollArea
-        className="h-full min-h-0"
+        className={cn(
+          'h-full min-h-0',
+          isRootDragOver &&
+            !(dragSourcePath && dirname(dragSourcePath) === worktreePath) &&
+            'bg-border'
+        )}
         viewportRef={scrollRef}
         viewportClassName="h-full min-h-0 py-2"
         onWheelCapture={handleWheelCapture}
+        onDragOver={rootDragHandlers.onDragOver}
+        onDragEnter={rootDragHandlers.onDragEnter}
+        onDragLeave={rootDragHandlers.onDragLeave}
+        onDrop={rootDragHandlers.onDrop}
+        onDragEnd={() => {
+          stopDragEdgeScroll()
+          setDropTargetDir(null)
+        }}
         onContextMenu={(e) => {
           const target = e.target as HTMLElement
           if (target.closest('[data-slot="context-menu-trigger"]')) {
@@ -322,12 +355,18 @@ export default function FileExplorer(): React.JSX.Element {
               ? (folderStatusByRelativePath.get(normalizedRelativePath) ?? null)
               : (statusByRelativePath.get(normalizedRelativePath) ?? null)
 
+            const rowParentDir = n.isDirectory ? n.path : dirname(n.path)
+            const sourceParentDir = dragSourcePath ? dirname(dragSourcePath) : null
+            const isInDropTarget =
+              dropTargetDir != null &&
+              dropTargetDir === rowParentDir &&
+              dropTargetDir !== sourceParentDir
             return (
               <div
                 key={vItem.key}
                 data-index={vItem.index}
                 ref={virtualizer.measureElement}
-                className="absolute left-0 right-0"
+                className={cn('absolute left-0 right-0', isInDropTarget && 'bg-border')}
                 style={{ transform: `translateY(${vItem.start}px)` }}
               >
                 <FileExplorerRow
@@ -347,6 +386,10 @@ export default function FileExplorer(): React.JSX.Element {
                   onStartNew={startNew}
                   onStartRename={startRename}
                   onRequestDelete={() => requestDelete(n)}
+                  onMoveDrop={handleMoveDrop}
+                  onDragTargetChange={setDropTargetDir}
+                  onDragSourceChange={setDragSourcePath}
+                  onDragExpandDir={handleDragExpandDir}
                 />
               </div>
             )
@@ -354,31 +397,13 @@ export default function FileExplorer(): React.JSX.Element {
         </div>
       </ScrollArea>
 
-      <DropdownMenu open={bgMenuOpen} onOpenChange={setBgMenuOpen} modal={false}>
-        <DropdownMenuTrigger asChild>
-          <button
-            aria-hidden
-            tabIndex={-1}
-            className="pointer-events-none fixed size-px opacity-0"
-            style={{ left: bgMenuPoint.x, top: bgMenuPoint.y }}
-          />
-        </DropdownMenuTrigger>
-        <DropdownMenuContent
-          className="w-48"
-          sideOffset={0}
-          align="start"
-          onCloseAutoFocus={(e) => e.preventDefault()}
-        >
-          <DropdownMenuItem onSelect={() => startNew('file', worktreePath, 0)}>
-            <FilePlus />
-            New File
-          </DropdownMenuItem>
-          <DropdownMenuItem onSelect={() => startNew('folder', worktreePath, 0)}>
-            <FolderPlus />
-            New Folder
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
+      <FileExplorerBackgroundMenu
+        open={bgMenuOpen}
+        onOpenChange={setBgMenuOpen}
+        point={bgMenuPoint}
+        worktreePath={worktreePath}
+        onStartNew={startNew}
+      />
 
       <FileDeleteDialog
         pendingDelete={pendingDelete}

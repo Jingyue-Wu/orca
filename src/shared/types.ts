@@ -1,3 +1,5 @@
+/* eslint-disable max-lines */
+
 // ─── Repo ────────────────────────────────────────────────────────────
 export type Repo = {
   id: string
@@ -9,6 +11,9 @@ export type Repo = {
   worktreeBaseRef?: string
   hookSettings?: RepoHookSettings
 }
+
+export type SetupRunPolicy = 'ask' | 'run-by-default' | 'skip-by-default'
+export type SetupDecision = 'inherit' | 'run' | 'skip'
 
 // ─── Worktree (git-level) ────────────────────────────────────────────
 export type GitWorktreeInfo = {
@@ -115,6 +120,10 @@ export type PRInfo = {
   checksStatus: CheckStatus
   updatedAt: string
   mergeable: PRMergeableState
+  // Why: check-runs are keyed by the PR head commit, not the mutable branch name.
+  // Keeping the head SHA in cached PR metadata lets the checks panel poll the
+  // correct commit without re-querying GitHub or guessing from local branch refs.
+  headSha?: string
   conflictSummary?: PRConflictSummary
 }
 
@@ -150,11 +159,32 @@ export type OrcaHooks = {
 }
 
 export type RepoHookSettings = {
+  // Why: legacy persisted data may still include the old UI-hook fields. Orca no longer
+  // treats them as an active config surface, but we keep them in the stored shape so
+  // existing local state can still be read without migrations.
   mode: 'auto' | 'override'
+  setupRunPolicy?: SetupRunPolicy
   scripts: {
     setup: string
     archive: string
   }
+}
+
+export type WorktreeSetupLaunch = {
+  runnerScriptPath: string
+  envVars: Record<string, string>
+}
+
+export type CreateWorktreeArgs = {
+  repoId: string
+  name: string
+  baseBranch?: string
+  setupDecision?: SetupDecision
+}
+
+export type CreateWorktreeResult = {
+  worktree: Worktree
+  setup?: WorktreeSetupLaunch
 }
 
 // ─── Updater ─────────────────────────────────────────────────────────
@@ -179,6 +209,8 @@ export type GlobalSettings = {
   branchPrefix: 'git-username' | 'custom' | 'none'
   branchPrefixCustom: string
   theme: 'system' | 'dark' | 'light'
+  editorAutoSave: boolean
+  editorAutoSaveDelayMs: number
   terminalFontSize: number
   terminalFontFamily: string
   terminalFontWeight: number
@@ -195,6 +227,7 @@ export type GlobalSettings = {
   terminalDividerThicknessPx: number
   terminalScrollbackBytes: number
   rightSidebarOpenByDefault: boolean
+  diffDefaultView: 'inline' | 'side-by-side'
 }
 
 export type WorktreeCardProperty = 'status' | 'unread' | 'ci' | 'issue' | 'pr' | 'comment'
@@ -206,6 +239,7 @@ export type PersistedUIState = {
   rightSidebarWidth: number
   groupBy: 'none' | 'repo' | 'pr-status'
   sortBy: 'name' | 'recent' | 'repo'
+  showActiveOnly: boolean
   filterRepoIds: string[]
   uiZoomLevel: number
   worktreeCardProperties: WorktreeCardProperty[]

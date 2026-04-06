@@ -1,9 +1,16 @@
 /* eslint-disable max-lines -- Why: runtime behavior is stateful and cross-cutting, so these tests stay in one file to preserve the end-to-end invariants around handles, waits, and graph sync. */
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { listWorktrees } from '../git/worktree'
+import type { WorktreeMeta } from '../../shared/types'
+import { addWorktree, listWorktrees } from '../git/worktree'
+import { createSetupRunnerScript, getEffectiveHooks, runHook } from '../hooks'
 import { OrcaRuntimeService } from './orca-runtime'
 
-const { MOCK_GIT_WORKTREES } = vi.hoisted(() => ({
+const {
+  MOCK_GIT_WORKTREES,
+  addWorktreeMock,
+  computeWorktreePathMock,
+  ensurePathWithinWorkspaceMock
+} = vi.hoisted(() => ({
   MOCK_GIT_WORKTREES: [
     {
       path: '/tmp/worktree-a',
@@ -12,23 +19,59 @@ const { MOCK_GIT_WORKTREES } = vi.hoisted(() => ({
       isBare: false,
       isMainWorktree: false
     }
-  ]
+  ],
+  addWorktreeMock: vi.fn(),
+  computeWorktreePathMock: vi.fn(),
+  ensurePathWithinWorkspaceMock: vi.fn()
 }))
 
 vi.mock('../git/worktree', () => ({
-  listWorktrees: vi.fn().mockResolvedValue(MOCK_GIT_WORKTREES)
+  listWorktrees: vi.fn().mockResolvedValue(MOCK_GIT_WORKTREES),
+  addWorktree: addWorktreeMock
 }))
+
+vi.mock('../hooks', () => ({
+  createSetupRunnerScript: vi.fn(),
+  getEffectiveHooks: vi.fn().mockReturnValue(null),
+  runHook: vi.fn().mockResolvedValue({ success: true, output: '' })
+}))
+
+vi.mock('../ipc/worktree-logic', async (importOriginal) => {
+  const actual = (await importOriginal()) as Record<string, unknown>
+  return {
+    ...actual,
+    computeWorktreePath: computeWorktreePathMock,
+    ensurePathWithinWorkspace: ensurePathWithinWorkspaceMock
+  }
+})
 
 afterEach(() => {
   vi.mocked(listWorktrees).mockResolvedValue(MOCK_GIT_WORKTREES)
+  vi.mocked(addWorktree).mockReset()
+  vi.mocked(createSetupRunnerScript).mockReset()
+  vi.mocked(getEffectiveHooks).mockReset()
+  vi.mocked(runHook).mockReset()
+  vi.mocked(getEffectiveHooks).mockReturnValue(null)
+  computeWorktreePathMock.mockReset()
+  ensurePathWithinWorkspaceMock.mockReset()
 })
+
+const TEST_WINDOW_ID = 1
+const TEST_REPO_ID = 'repo-1'
+const TEST_REPO_PATH = '/tmp/repo'
+const TEST_WORKTREE_PATH = '/tmp/worktree-a'
+const TEST_WORKTREE_ID = `${TEST_REPO_ID}::${TEST_WORKTREE_PATH}`
+
+function createRuntime(): OrcaRuntimeService {
+  return new OrcaRuntimeService(store)
+}
 
 const store = {
   getRepo: (id: string) => store.getRepos().find((repo) => repo.id === id),
   getRepos: () => [
     {
-      id: 'repo-1',
-      path: '/tmp/repo',
+      id: TEST_REPO_ID,
+      path: TEST_REPO_PATH,
       displayName: 'repo',
       badgeColor: 'blue',
       addedAt: 1
@@ -41,7 +84,7 @@ const store = {
       ...updates
     }) as never,
   getAllWorktreeMeta: () => ({
-    'repo-1::/tmp/worktree-a': {
+    [TEST_WORKTREE_ID]: {
       displayName: 'foo',
       comment: '',
       linkedIssue: 123,
@@ -55,7 +98,7 @@ const store = {
   getWorktreeMeta: (worktreeId: string) => store.getAllWorktreeMeta()[worktreeId],
   setWorktreeMeta: (_worktreeId: string, meta: Record<string, unknown>) =>
     ({
-      ...store.getAllWorktreeMeta()['repo-1::/tmp/worktree-a'],
+      ...store.getAllWorktreeMeta()[TEST_WORKTREE_ID],
       ...meta
     }) as never,
   removeWorktreeMeta: () => {},
@@ -67,9 +110,28 @@ const store = {
   })
 }
 
+computeWorktreePathMock.mockImplementation(
+  (
+    sanitizedName: string,
+    repoPath: string,
+    settings: { nestWorkspaces: boolean; workspaceDir: string }
+  ) => {
+    if (settings.nestWorkspaces) {
+      const repoName =
+        repoPath
+          .split(/[\\/]/)
+          .at(-1)
+          ?.replace(/\.git$/, '') ?? 'repo'
+      return `${settings.workspaceDir}/${repoName}/${sanitizedName}`
+    }
+    return `${settings.workspaceDir}/${sanitizedName}`
+  }
+)
+ensurePathWithinWorkspaceMock.mockImplementation((targetPath: string) => targetPath)
+
 describe('OrcaRuntimeService', () => {
   it('starts unavailable with no authoritative window', () => {
-    const runtime = new OrcaRuntimeService(store)
+    const runtime = createRuntime()
 
     expect(runtime.getStatus()).toMatchObject({
       graphStatus: 'unavailable',
@@ -80,20 +142,20 @@ describe('OrcaRuntimeService', () => {
   })
 
   it('claims the first window as authoritative and ignores later windows', () => {
-    const runtime = new OrcaRuntimeService(store)
+    const runtime = createRuntime()
 
-    runtime.attachWindow(1)
+    runtime.attachWindow(TEST_WINDOW_ID)
     runtime.attachWindow(2)
 
-    expect(runtime.getStatus().authoritativeWindowId).toBe(1)
+    expect(runtime.getStatus().authoritativeWindowId).toBe(TEST_WINDOW_ID)
   })
 
   it('bumps the epoch and enters reloading when the authoritative window reloads', () => {
-    const runtime = new OrcaRuntimeService(store)
+    const runtime = createRuntime()
 
-    runtime.attachWindow(1)
-    runtime.markGraphReady(1)
-    runtime.markRendererReloading(1)
+    runtime.attachWindow(TEST_WINDOW_ID)
+    runtime.markGraphReady(TEST_WINDOW_ID)
+    runtime.markRendererReloading(TEST_WINDOW_ID)
 
     expect(runtime.getStatus()).toMatchObject({
       graphStatus: 'reloading',
@@ -102,23 +164,23 @@ describe('OrcaRuntimeService', () => {
   })
 
   it('can mark the graph ready for the authoritative window', () => {
-    const runtime = new OrcaRuntimeService(store)
+    const runtime = createRuntime()
 
-    runtime.attachWindow(1)
-    runtime.markGraphReady(1)
-    runtime.markRendererReloading(1)
-    runtime.markGraphReady(1)
+    runtime.attachWindow(TEST_WINDOW_ID)
+    runtime.markGraphReady(TEST_WINDOW_ID)
+    runtime.markRendererReloading(TEST_WINDOW_ID)
+    runtime.markGraphReady(TEST_WINDOW_ID)
 
     expect(runtime.getStatus().graphStatus).toBe('ready')
   })
 
   it('drops back to unavailable and clears authority when the window disappears', () => {
-    const runtime = new OrcaRuntimeService(store)
+    const runtime = createRuntime()
 
-    runtime.attachWindow(1)
-    runtime.markGraphReady(1)
-    runtime.markRendererReloading(1)
-    runtime.markGraphUnavailable(1)
+    runtime.attachWindow(TEST_WINDOW_ID)
+    runtime.markGraphReady(TEST_WINDOW_ID)
+    runtime.markRendererReloading(TEST_WINDOW_ID)
+    runtime.markGraphUnavailable(TEST_WINDOW_ID)
 
     expect(runtime.getStatus()).toMatchObject({
       graphStatus: 'unavailable',
@@ -128,10 +190,10 @@ describe('OrcaRuntimeService', () => {
   })
 
   it('stays unavailable during initial loads before a graph is published', () => {
-    const runtime = new OrcaRuntimeService(store)
+    const runtime = createRuntime()
 
-    runtime.attachWindow(1)
-    runtime.markRendererReloading(1)
+    runtime.attachWindow(TEST_WINDOW_ID)
+    runtime.markRendererReloading(TEST_WINDOW_ID)
 
     expect(runtime.getStatus()).toMatchObject({
       graphStatus: 'unavailable',
@@ -177,6 +239,32 @@ describe('OrcaRuntimeService', () => {
     const shown = await runtime.showTerminal(terminals.terminals[0].handle)
     expect(shown.handle).toBe(terminals.terminals[0].handle)
     expect(shown.ptyId).toBe('pty-1')
+  })
+
+  it('resolves branch selectors when worktrees store refs/heads-prefixed branches', async () => {
+    vi.mocked(listWorktrees).mockResolvedValueOnce([
+      {
+        path: '/tmp/worktree-a',
+        head: 'abc',
+        branch: 'refs/heads/Jinwoo-H/test-3a',
+        isBare: false,
+        isMainWorktree: false
+      }
+    ])
+
+    const runtime = new OrcaRuntimeService(store)
+
+    const worktree = await runtime.showManagedWorktree('branch:Jinwoo-H/test-3a')
+    expect(worktree).toMatchObject({
+      branch: 'refs/heads/Jinwoo-H/test-3a',
+      path: '/tmp/worktree-a'
+    })
+  })
+
+  it('does not interpret active as a runtime-global worktree selector', async () => {
+    const runtime = new OrcaRuntimeService(store)
+
+    await expect(runtime.showManagedWorktree('active')).rejects.toThrow('selector_not_found')
   })
 
   it('reads bounded terminal output and writes through the PTY controller', async () => {
@@ -487,5 +575,144 @@ describe('OrcaRuntimeService', () => {
     await expect(runtime.getWorktreePs(-1)).rejects.toThrow('invalid_limit')
     await expect(runtime.listManagedWorktrees(undefined, 0)).rejects.toThrow('invalid_limit')
     await expect(runtime.searchRepoRefs('id:repo-1', 'main', -5)).rejects.toThrow('invalid_limit')
+  })
+
+  it('returns a setup launch payload for CLI-created worktrees when orca.yaml defines setup', async () => {
+    const runtime = new OrcaRuntimeService(store)
+    const activateWorktree = vi.fn()
+    runtime.setNotifier({
+      worktreesChanged: vi.fn(),
+      reposChanged: vi.fn(),
+      activateWorktree
+    })
+    runtime.attachWindow(1)
+
+    computeWorktreePathMock.mockReturnValue('/tmp/workspaces/runtime-hook-test')
+    ensurePathWithinWorkspaceMock.mockReturnValue('/tmp/workspaces/runtime-hook-test')
+    vi.mocked(getEffectiveHooks).mockReturnValue({
+      scripts: {
+        setup: 'pnpm worktree:setup'
+      }
+    })
+    vi.mocked(createSetupRunnerScript).mockReturnValue({
+      runnerScriptPath: '/tmp/repo/.git/orca/setup-runner.sh',
+      envVars: {
+        ORCA_ROOT_PATH: '/tmp/repo',
+        ORCA_WORKTREE_PATH: '/tmp/workspaces/runtime-hook-test'
+      }
+    })
+    vi.mocked(listWorktrees).mockResolvedValueOnce([
+      {
+        path: '/tmp/workspaces/runtime-hook-test',
+        head: 'def',
+        branch: 'runtime-hook-test',
+        isBare: false,
+        isMainWorktree: false
+      }
+    ])
+
+    const result = await runtime.createManagedWorktree({
+      repoSelector: 'id:repo-1',
+      name: 'runtime-hook-test'
+    })
+
+    expect(createSetupRunnerScript).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'repo-1', path: '/tmp/repo' }),
+      '/tmp/workspaces/runtime-hook-test',
+      'pnpm worktree:setup'
+    )
+    expect(runHook).not.toHaveBeenCalled()
+    expect(result).toEqual({
+      worktree: expect.objectContaining({
+        repoId: 'repo-1',
+        path: '/tmp/workspaces/runtime-hook-test',
+        branch: 'runtime-hook-test'
+      }),
+      setup: {
+        runnerScriptPath: '/tmp/repo/.git/orca/setup-runner.sh',
+        envVars: {
+          ORCA_ROOT_PATH: '/tmp/repo',
+          ORCA_WORKTREE_PATH: '/tmp/workspaces/runtime-hook-test'
+        }
+      }
+    })
+    expect(activateWorktree).toHaveBeenCalledWith('repo-1', expect.any(String), result.setup)
+  })
+
+  it('preserves create-time metadata on later runtime listings when Windows path formatting differs', async () => {
+    const metaById: Record<string, WorktreeMeta> = {}
+    const runtimeStore = {
+      getRepo: (id: string) => runtimeStore.getRepos().find((repo) => repo.id === id),
+      getRepos: () => [
+        {
+          id: 'repo-1',
+          path: 'C:\\repo',
+          displayName: 'repo',
+          badgeColor: 'blue',
+          addedAt: 1
+        }
+      ],
+      addRepo: () => {},
+      updateRepo: () => undefined as never,
+      getAllWorktreeMeta: () => metaById,
+      getWorktreeMeta: (worktreeId: string) => metaById[worktreeId],
+      setWorktreeMeta: (worktreeId: string, meta: Partial<WorktreeMeta>) => {
+        const existingMeta = metaById[worktreeId]
+        const nextMeta: WorktreeMeta = {
+          displayName: meta.displayName ?? existingMeta?.displayName ?? '',
+          comment: meta.comment ?? existingMeta?.comment ?? '',
+          linkedIssue: meta.linkedIssue ?? existingMeta?.linkedIssue ?? null,
+          linkedPR: meta.linkedPR ?? existingMeta?.linkedPR ?? null,
+          isArchived: meta.isArchived ?? existingMeta?.isArchived ?? false,
+          isUnread: meta.isUnread ?? existingMeta?.isUnread ?? false,
+          sortOrder: meta.sortOrder ?? existingMeta?.sortOrder ?? 0,
+          lastActivityAt: meta.lastActivityAt ?? existingMeta?.lastActivityAt ?? 0
+        }
+        metaById[worktreeId] = nextMeta
+        return nextMeta
+      },
+      removeWorktreeMeta: () => {},
+      getSettings: () => ({
+        workspaceDir: 'C:\\workspaces',
+        nestWorkspaces: false,
+        branchPrefix: 'none',
+        branchPrefixCustom: ''
+      })
+    }
+    computeWorktreePathMock.mockReturnValue('C:\\workspaces\\improve-dashboard')
+    ensurePathWithinWorkspaceMock.mockReturnValue('C:\\workspaces\\improve-dashboard')
+    vi.mocked(listWorktrees)
+      .mockResolvedValueOnce([
+        {
+          path: 'C:/workspaces/improve-dashboard',
+          head: 'abc',
+          branch: 'refs/heads/improve-dashboard',
+          isBare: false,
+          isMainWorktree: false
+        }
+      ])
+      .mockResolvedValueOnce([
+        {
+          path: 'C:/workspaces/improve-dashboard',
+          head: 'abc',
+          branch: 'refs/heads/improve-dashboard',
+          isBare: false,
+          isMainWorktree: false
+        }
+      ])
+
+    const runtime = new OrcaRuntimeService(runtimeStore)
+    await runtime.createManagedWorktree({
+      repoSelector: 'id:repo-1',
+      name: 'Improve Dashboard'
+    })
+    const listed = await runtime.listManagedWorktrees('id:repo-1')
+
+    expect(listed.worktrees).toMatchObject([
+      {
+        id: 'repo-1::C:/workspaces/improve-dashboard',
+        displayName: 'Improve Dashboard'
+      }
+    ])
   })
 })

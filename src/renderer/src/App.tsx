@@ -14,7 +14,6 @@ import Landing from './components/Landing'
 import Settings from './components/settings/Settings'
 import RightSidebar from './components/right-sidebar'
 import QuickOpen from './components/QuickOpen'
-import UpdateReminder from './components/UpdateReminder'
 import { useGitStatusPolling } from './components/right-sidebar/useGitStatusPolling'
 import {
   setRuntimeGraphStoreStateGetter,
@@ -69,6 +68,7 @@ function App(): React.JSX.Element {
   const sidebarWidth = useAppStore((s) => s.sidebarWidth)
   const groupBy = useAppStore((s) => s.groupBy)
   const sortBy = useAppStore((s) => s.sortBy)
+  const showActiveOnly = useAppStore((s) => s.showActiveOnly)
   const filterRepoIds = useAppStore((s) => s.filterRepoIds)
   const persistedUIReady = useAppStore((s) => s.persistedUIReady)
 
@@ -117,6 +117,7 @@ function App(): React.JSX.Element {
             rightSidebarWidth: 350,
             groupBy: 'none',
             sortBy: 'name',
+            showActiveOnly: false,
             filterRepoIds: [],
             uiZoomLevel: 0,
             worktreeCardProperties: [...DEFAULT_WORKTREE_CARD_PROPERTIES],
@@ -224,12 +225,21 @@ function App(): React.JSX.Element {
         rightSidebarWidth,
         groupBy,
         sortBy,
+        showActiveOnly,
         filterRepoIds
       })
     }, 150)
 
     return () => window.clearTimeout(timer)
-  }, [persistedUIReady, sidebarWidth, rightSidebarWidth, groupBy, sortBy, filterRepoIds])
+  }, [
+    persistedUIReady,
+    sidebarWidth,
+    rightSidebarWidth,
+    groupBy,
+    sortBy,
+    showActiveOnly,
+    filterRepoIds
+  ])
 
   // Apply theme to document
   useEffect(() => {
@@ -327,6 +337,13 @@ function App(): React.JSX.Element {
         return
       }
 
+      // Cmd/Ctrl+B — toggle left sidebar
+      if (!e.altKey && !e.shiftKey && e.key.toLowerCase() === 'b') {
+        e.preventDefault()
+        toggleSidebar()
+        return
+      }
+
       // Cmd/Ctrl+N — create worktree
       if (!e.altKey && !e.shiftKey && e.key.toLowerCase() === 'n') {
         if (repos.length === 0) {
@@ -368,6 +385,7 @@ function App(): React.JSX.Element {
     activeWorktreeId,
     openModal,
     repos.length,
+    toggleSidebar,
     setRightSidebarTab,
     setRightSidebarOpen,
     setQuickOpenVisible
@@ -428,7 +446,6 @@ function App(): React.JSX.Element {
         {showSidebar && rightSidebarOpen ? <RightSidebar /> : null}
       </div>
       <QuickOpen />
-      <UpdateReminder />
       <Toaster closeButton toastOptions={{ className: 'font-sans text-sm' }} />
     </div>
   )

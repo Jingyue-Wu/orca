@@ -23,6 +23,12 @@ export type UISlice = {
   setSidebarWidth: (width: number) => void
   activeView: 'terminal' | 'settings'
   setActiveView: (view: UISlice['activeView']) => void
+  settingsNavigationTarget: {
+    pane: 'general' | 'appearance' | 'terminal' | 'shortcuts' | 'repo'
+    repoId: string | null
+  } | null
+  openSettingsTarget: (target: NonNullable<UISlice['settingsNavigationTarget']>) => void
+  clearSettingsTarget: () => void
   activeModal: 'none' | 'create-worktree' | 'edit-meta' | 'delete-worktree'
   modalData: Record<string, unknown>
   openModal: (modal: UISlice['activeModal'], data?: Record<string, unknown>) => void
@@ -61,6 +67,9 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set) => (
 
   activeView: 'terminal',
   setActiveView: (view) => set({ activeView: view }),
+  settingsNavigationTarget: null,
+  openSettingsTarget: (target) => set({ settingsNavigationTarget: target }),
+  clearSettingsTarget: () => set({ settingsNavigationTarget: null }),
 
   activeModal: 'none',
   modalData: {},
@@ -111,6 +120,10 @@ export const createUISlice: StateCreator<AppState, [], [], UISlice> = (set) => (
         rightSidebarWidth: sanitizePersistedSidebarWidth(ui.rightSidebarWidth, s.rightSidebarWidth),
         groupBy: ui.groupBy,
         sortBy,
+        // Why: "Active only" is part of the user's sidebar working set, not a
+        // transient render detail. Restoring it on launch keeps the filtered
+        // worktree list stable across restarts instead of silently widening it.
+        showActiveOnly: ui.showActiveOnly,
         filterRepoIds: (ui.filterRepoIds ?? []).filter((repoId) => validRepoIds.has(repoId)),
         worktreeCardProperties: ui.worktreeCardProperties ?? [...DEFAULT_WORKTREE_CARD_PROPERTIES],
         dismissedUpdateVersion: ui.dismissedUpdateVersion ?? null,

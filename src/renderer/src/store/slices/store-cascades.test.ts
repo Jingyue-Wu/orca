@@ -1,8 +1,4 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { create } from 'zustand'
-import type { AppState } from '../types'
-import type { Worktree, TerminalTab, TerminalLayoutSnapshot } from '../../../../shared/types'
-import type { OpenFile } from './editor'
 
 // Mock sonner (imported by repos.ts)
 vi.mock('sonner', () => ({ toast: { info: vi.fn(), success: vi.fn(), error: vi.fn() } }))
@@ -47,75 +43,14 @@ const mockApi = {
 // @ts-expect-error -- mock
 globalThis.window = { api: mockApi }
 
-import { createRepoSlice } from './repos'
-import { createWorktreeSlice } from './worktrees'
-import { createTerminalSlice } from './terminals'
-import { createUISlice } from './ui'
-import { createSettingsSlice } from './settings'
-import { createGitHubSlice } from './github'
-import { createEditorSlice } from './editor'
-
-function createTestStore() {
-  return create<AppState>()((...a) => ({
-    ...createRepoSlice(...a),
-    ...createWorktreeSlice(...a),
-    ...createTerminalSlice(...a),
-    ...createUISlice(...a),
-    ...createSettingsSlice(...a),
-    ...createGitHubSlice(...a),
-    ...createEditorSlice(...a)
-  }))
-}
-
-// ─── Helpers ──────────────────────────────────────────────────────────
-
-function makeWorktree(overrides: Partial<Worktree> & { id: string; repoId: string }): Worktree {
-  return {
-    path: '/tmp/wt',
-    head: 'abc123',
-    branch: 'refs/heads/feature',
-    isBare: false,
-    isMainWorktree: false,
-    displayName: 'feature',
-    comment: '',
-    linkedIssue: null,
-    linkedPR: null,
-    isArchived: false,
-    isUnread: false,
-    sortOrder: 0,
-    lastActivityAt: 0,
-    ...overrides
-  }
-}
-
-function makeTab(
-  overrides: Partial<TerminalTab> & { id: string; worktreeId: string }
-): TerminalTab {
-  return {
-    ptyId: null,
-    title: 'Terminal 1',
-    customTitle: null,
-    color: null,
-    sortOrder: 0,
-    createdAt: Date.now(),
-    ...overrides
-  }
-}
-
-function makeLayout(): TerminalLayoutSnapshot {
-  return { root: null, activeLeafId: null, expandedLeafId: null }
-}
-
-function makeOpenFile(overrides: Partial<OpenFile> & { id: string; worktreeId: string }): OpenFile {
-  return {
-    filePath: overrides.id,
-    relativePath: 'file.ts',
-    language: 'typescript',
-    isDirty: false,
-    mode: 'edit',
-    ...overrides
-  }
-}
+import {
+  createTestStore,
+  makeLayout,
+  makeOpenFile,
+  makeTab,
+  makeWorktree,
+  seedStore
+} from './store-test-helpers'
 
 // ─── Tests ────────────────────────────────────────────────────────────
 
@@ -129,11 +64,7 @@ describe('removeWorktree cascade', () => {
     const store = createTestStore()
     const worktreeId = 'repo1::/path/wt1'
 
-    // Seed state
-    store.setState({
-      repos: [
-        { id: 'repo1', path: '/repo1', displayName: 'Repo 1', badgeColor: '#000', addedAt: 0 }
-      ],
+    seedStore(store, {
       worktreesByRepo: {
         repo1: [makeWorktree({ id: worktreeId, repoId: 'repo1', path: '/path/wt1' })]
       },
@@ -153,6 +84,19 @@ describe('removeWorktree cascade', () => {
       },
       deleteStateByWorktreeId: {
         [worktreeId]: { isDeleting: false, error: null, canForceDelete: false }
+      },
+      fileSearchStateByWorktree: {
+        [worktreeId]: {
+          query: 'needle',
+          caseSensitive: true,
+          wholeWord: false,
+          useRegex: false,
+          includePattern: '*.ts',
+          excludePattern: 'dist/**',
+          results: { files: [], totalMatches: 0, truncated: false },
+          loading: false,
+          collapsedFiles: new Set(['/path/wt1/file.ts'])
+        }
       },
       activeWorktreeId: worktreeId,
       activeTabId: 'tab1',
@@ -174,6 +118,7 @@ describe('removeWorktree cascade', () => {
     expect(s.terminalLayoutsByTabId['tab1']).toBeUndefined()
     expect(s.terminalLayoutsByTabId['tab2']).toBeUndefined()
     expect(s.deleteStateByWorktreeId[worktreeId]).toBeUndefined()
+    expect(s.fileSearchStateByWorktree[worktreeId]).toBeUndefined()
     expect(s.activeWorktreeId).toBeNull()
     expect(s.activeTabId).toBeNull()
     expect(s.openFiles).toEqual([])
@@ -189,10 +134,7 @@ describe('removeWorktree cascade', () => {
 
     mockApi.worktrees.remove.mockRejectedValueOnce(new Error('branch has changes'))
 
-    store.setState({
-      repos: [
-        { id: 'repo1', path: '/repo1', displayName: 'Repo 1', badgeColor: '#000', addedAt: 0 }
-      ],
+    seedStore(store, {
       worktreesByRepo: {
         repo1: [makeWorktree({ id: worktreeId, repoId: 'repo1' })]
       },
@@ -224,10 +166,7 @@ describe('removeWorktree cascade', () => {
 
     mockApi.worktrees.remove.mockRejectedValueOnce(new Error('fatal error'))
 
-    store.setState({
-      repos: [
-        { id: 'repo1', path: '/repo1', displayName: 'Repo 1', badgeColor: '#000', addedAt: 0 }
-      ],
+    seedStore(store, {
       worktreesByRepo: {
         repo1: [makeWorktree({ id: worktreeId, repoId: 'repo1' })]
       },
@@ -252,10 +191,7 @@ describe('removeWorktree cascade', () => {
     const wt1 = 'repo1::/path/wt1'
     const wt2 = 'repo1::/path/wt2'
 
-    store.setState({
-      repos: [
-        { id: 'repo1', path: '/repo1', displayName: 'Repo 1', badgeColor: '#000', addedAt: 0 }
-      ],
+    seedStore(store, {
       worktreesByRepo: {
         repo1: [
           makeWorktree({ id: wt1, repoId: 'repo1', path: '/path/wt1' }),
@@ -274,6 +210,30 @@ describe('removeWorktree cascade', () => {
         tab1: makeLayout(),
         tab2: makeLayout()
       },
+      fileSearchStateByWorktree: {
+        [wt1]: {
+          query: 'old',
+          caseSensitive: false,
+          wholeWord: false,
+          useRegex: false,
+          includePattern: '',
+          excludePattern: '',
+          results: { files: [], totalMatches: 0, truncated: false },
+          loading: false,
+          collapsedFiles: new Set()
+        },
+        [wt2]: {
+          query: 'keep',
+          caseSensitive: true,
+          wholeWord: true,
+          useRegex: false,
+          includePattern: '*.md',
+          excludePattern: '',
+          results: { files: [], totalMatches: 1, truncated: false },
+          loading: false,
+          collapsedFiles: new Set(['/path/wt2/notes.md'])
+        }
+      },
       activeWorktreeId: wt2,
       activeTabId: 'tab2'
     })
@@ -286,6 +246,7 @@ describe('removeWorktree cascade', () => {
     expect(s.tabsByWorktree[wt2][0].id).toBe('tab2')
     expect(s.ptyIdsByTabId['tab2']).toEqual(['pty2'])
     expect(s.terminalLayoutsByTabId['tab2']).toEqual(makeLayout())
+    expect(s.fileSearchStateByWorktree[wt2]?.query).toBe('keep')
     expect(s.activeWorktreeId).toBe(wt2)
     expect(s.activeTabId).toBe('tab2')
 
@@ -294,6 +255,40 @@ describe('removeWorktree cascade', () => {
     expect(s.tabsByWorktree[wt1]).toBeUndefined()
     expect(s.ptyIdsByTabId['tab1']).toBeUndefined()
     expect(s.terminalLayoutsByTabId['tab1']).toBeUndefined()
+    expect(s.fileSearchStateByWorktree[wt1]).toBeUndefined()
+  })
+
+  it('shuts down terminals before asking the backend to remove the worktree', async () => {
+    const store = createTestStore()
+    const worktreeId = 'repo1::/path/wt1'
+    const callOrder: string[] = []
+
+    mockApi.pty.kill.mockImplementationOnce(async () => {
+      callOrder.push('kill')
+    })
+    mockApi.worktrees.remove.mockImplementationOnce(async () => {
+      callOrder.push('remove')
+    })
+
+    seedStore(store, {
+      worktreesByRepo: {
+        repo1: [makeWorktree({ id: worktreeId, repoId: 'repo1', path: '/path/wt1' })]
+      },
+      tabsByWorktree: {
+        [worktreeId]: [makeTab({ id: 'tab1', worktreeId })]
+      },
+      ptyIdsByTabId: {
+        tab1: ['pty1']
+      },
+      terminalLayoutsByTabId: {
+        tab1: makeLayout()
+      }
+    })
+
+    const result = await store.getState().removeWorktree(worktreeId)
+
+    expect(result).toEqual({ ok: true })
+    expect(callOrder).toEqual(['kill', 'remove'])
   })
 })
 
@@ -307,10 +302,7 @@ describe('setActiveWorktree', () => {
     const store = createTestStore()
     const worktreeId = 'repo1::/path/wt1'
 
-    store.setState({
-      repos: [
-        { id: 'repo1', path: '/repo1', displayName: 'Repo 1', badgeColor: '#000', addedAt: 0 }
-      ],
+    seedStore(store, {
       worktreesByRepo: {
         repo1: [makeWorktree({ id: worktreeId, repoId: 'repo1', sortOrder: 123, isUnread: false })]
       },

@@ -67,6 +67,15 @@ export default function TerminalPane({
   const clearTabPtyId = useAppStore((store) => store.clearTabPtyId)
   const markWorktreeUnread = useAppStore((store) => store.markWorktreeUnread)
   const settings = useAppStore((store) => store.settings)
+  const [startup] = useState(() => useAppStore.getState().pendingStartupByTabId[tabId])
+  const consumeTabStartupCommand = useAppStore((store) => store.consumeTabStartupCommand)
+
+  useEffect(() => {
+    if (startup) {
+      consumeTabStartupCommand(tabId)
+    }
+  }, [startup, tabId, consumeTabStartupCommand])
+
   const settingsRef = useRef(settings)
   settingsRef.current = settings
   const onPtyExitRef = useRef(onPtyExit)
@@ -115,6 +124,7 @@ export default function TerminalPane({
     tabId,
     worktreeId,
     cwd,
+    startup,
     isActive,
     systemPrefersDark,
     settings,
@@ -159,6 +169,7 @@ export default function TerminalPane({
     isActive,
     managerRef,
     containerRef,
+    paneTransportsRef,
     pendingWritesRef,
     isActiveRef,
     toggleExpandPane
@@ -298,6 +309,7 @@ export default function TerminalPane({
       <div
         ref={containerRef}
         className="absolute inset-0 min-h-0 min-w-0"
+        data-native-file-drop-target="terminal"
         style={terminalContainerStyle}
         onContextMenuCapture={contextMenu.onContextMenuCapture}
         onDragOver={(e) => {

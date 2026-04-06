@@ -11,9 +11,13 @@ const {
   getBranchConflictKindMock,
   getPRForBranchMock,
   getEffectiveHooksMock,
+  createSetupRunnerScriptMock,
+  shouldRunSetupForCreateMock,
   runHookMock,
   hasHooksFileMock,
-  loadHooksMock
+  loadHooksMock,
+  computeWorktreePathMock,
+  ensurePathWithinWorkspaceMock
 } = vi.hoisted(() => ({
   handleMock: vi.fn(),
   removeHandlerMock: vi.fn(),
@@ -25,9 +29,13 @@ const {
   getBranchConflictKindMock: vi.fn(),
   getPRForBranchMock: vi.fn(),
   getEffectiveHooksMock: vi.fn(),
+  createSetupRunnerScriptMock: vi.fn(),
+  shouldRunSetupForCreateMock: vi.fn(),
   runHookMock: vi.fn(),
   hasHooksFileMock: vi.fn(),
-  loadHooksMock: vi.fn()
+  loadHooksMock: vi.fn(),
+  computeWorktreePathMock: vi.fn(),
+  ensurePathWithinWorkspaceMock: vi.fn()
 }))
 
 vi.mock('electron', () => ({
@@ -54,11 +62,22 @@ vi.mock('../github/client', () => ({
 }))
 
 vi.mock('../hooks', () => ({
+  createSetupRunnerScript: createSetupRunnerScriptMock,
   getEffectiveHooks: getEffectiveHooksMock,
   loadHooks: loadHooksMock,
   runHook: runHookMock,
-  hasHooksFile: hasHooksFileMock
+  hasHooksFile: hasHooksFileMock,
+  shouldRunSetupForCreate: shouldRunSetupForCreateMock
 }))
+
+vi.mock('./worktree-logic', async (importOriginal) => {
+  const actual = (await importOriginal()) as Record<string, unknown>
+  return {
+    ...actual,
+    computeWorktreePath: computeWorktreePathMock,
+    ensurePathWithinWorkspace: ensurePathWithinWorkspaceMock
+  }
+})
 
 import { registerWorktreeHandlers } from './worktrees'
 
@@ -82,26 +101,34 @@ describe('registerWorktreeHandlers', () => {
   }
 
   beforeEach(() => {
-    handleMock.mockReset()
-    removeHandlerMock.mockReset()
-    listWorktreesMock.mockReset()
-    addWorktreeMock.mockReset()
-    removeWorktreeMock.mockReset()
-    getGitUsernameMock.mockReset()
-    getDefaultBaseRefMock.mockReset()
-    getBranchConflictKindMock.mockReset()
-    getPRForBranchMock.mockReset()
-    getEffectiveHooksMock.mockReset()
-    runHookMock.mockReset()
-    hasHooksFileMock.mockReset()
-    loadHooksMock.mockReset()
-    mainWindow.webContents.send.mockReset()
-    store.getRepos.mockReset()
-    store.getRepo.mockReset()
-    store.getSettings.mockReset()
-    store.getWorktreeMeta.mockReset()
-    store.setWorktreeMeta.mockReset()
-    store.removeWorktreeMeta.mockReset()
+    for (const m of [
+      handleMock,
+      removeHandlerMock,
+      listWorktreesMock,
+      addWorktreeMock,
+      removeWorktreeMock,
+      getGitUsernameMock,
+      getDefaultBaseRefMock,
+      getBranchConflictKindMock,
+      getPRForBranchMock,
+      getEffectiveHooksMock,
+      createSetupRunnerScriptMock,
+      shouldRunSetupForCreateMock,
+      runHookMock,
+      hasHooksFileMock,
+      loadHooksMock,
+      computeWorktreePathMock,
+      ensurePathWithinWorkspaceMock,
+      mainWindow.webContents.send,
+      store.getRepos,
+      store.getRepo,
+      store.getSettings,
+      store.getWorktreeMeta,
+      store.setWorktreeMeta,
+      store.removeWorktreeMeta
+    ]) {
+      m.mockReset()
+    }
 
     for (const key of Object.keys(handlers)) {
       delete handlers[key]
@@ -111,14 +138,15 @@ describe('registerWorktreeHandlers', () => {
       handlers[channel] = handler
     })
 
-    store.getRepo.mockReturnValue({
+    const repo = {
       id: 'repo-1',
       path: '/workspace/repo',
       displayName: 'repo',
       badgeColor: '#000',
-      addedAt: 0,
-      worktreeBaseRef: null
-    })
+      addedAt: 0
+    }
+    store.getRepos.mockReturnValue([repo])
+    store.getRepo.mockReturnValue({ ...repo, worktreeBaseRef: null })
     store.getSettings.mockReturnValue({
       branchPrefix: 'none',
       nestWorkspaces: false,
@@ -131,6 +159,32 @@ describe('registerWorktreeHandlers', () => {
     getBranchConflictKindMock.mockResolvedValue(null)
     getPRForBranchMock.mockResolvedValue(null)
     getEffectiveHooksMock.mockReturnValue(null)
+    shouldRunSetupForCreateMock.mockReturnValue(false)
+    createSetupRunnerScriptMock.mockReturnValue({
+      runnerScriptPath: '/workspace/repo/.git/orca/setup-runner.sh',
+      envVars: {
+        ORCA_ROOT_PATH: '/workspace/repo',
+        ORCA_WORKTREE_PATH: '/workspace/improve-dashboard'
+      }
+    })
+    computeWorktreePathMock.mockImplementation(
+      (
+        sanitizedName: string,
+        repoPath: string,
+        settings: { nestWorkspaces: boolean; workspaceDir: string }
+      ) => {
+        if (settings.nestWorkspaces) {
+          const repoName =
+            repoPath
+              .split(/[\\/]/)
+              .at(-1)
+              ?.replace(/\.git$/, '') ?? 'repo'
+          return `${settings.workspaceDir}/${repoName}/${sanitizedName}`
+        }
+        return `${settings.workspaceDir}/${sanitizedName}`
+      }
+    )
+    ensurePathWithinWorkspaceMock.mockImplementation((targetPath: string) => targetPath)
     listWorktreesMock.mockResolvedValue([])
 
     registerWorktreeHandlers(mainWindow as never, store as never)
@@ -173,5 +227,103 @@ describe('registerWorktreeHandlers', () => {
     )
 
     expect(addWorktreeMock).not.toHaveBeenCalled()
+  })
+
+  const createdWorktreeList = [
+    {
+      path: '/workspace/improve-dashboard',
+      head: 'abc123',
+      branch: 'improve-dashboard',
+      isBare: false,
+      isMainWorktree: false
+    }
+  ]
+
+  it('returns a setup launch payload when setup should run', async () => {
+    listWorktreesMock.mockResolvedValue(createdWorktreeList)
+    getEffectiveHooksMock.mockReturnValue({
+      scripts: {
+        setup: 'pnpm worktree:setup'
+      }
+    })
+    shouldRunSetupForCreateMock.mockReturnValue(true)
+
+    const result = await handlers['worktrees:create'](null, {
+      repoId: 'repo-1',
+      name: 'improve-dashboard',
+      setupDecision: 'run'
+    })
+
+    expect(createSetupRunnerScriptMock).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'repo-1' }),
+      '/workspace/improve-dashboard',
+      'pnpm worktree:setup'
+    )
+    expect(result).toEqual({
+      worktree: expect.objectContaining({
+        repoId: 'repo-1',
+        path: '/workspace/improve-dashboard',
+        branch: 'improve-dashboard'
+      }),
+      setup: {
+        runnerScriptPath: '/workspace/repo/.git/orca/setup-runner.sh',
+        envVars: {
+          ORCA_ROOT_PATH: '/workspace/repo',
+          ORCA_WORKTREE_PATH: '/workspace/improve-dashboard'
+        }
+      }
+    })
+  })
+
+  it('still returns the created worktree when setup runner generation fails', async () => {
+    listWorktreesMock.mockResolvedValue(createdWorktreeList)
+    getEffectiveHooksMock.mockReturnValue({
+      scripts: {
+        setup: 'pnpm worktree:setup'
+      }
+    })
+    shouldRunSetupForCreateMock.mockReturnValue(true)
+    createSetupRunnerScriptMock.mockImplementation(() => {
+      throw new Error('disk full')
+    })
+
+    const result = await handlers['worktrees:create'](null, {
+      repoId: 'repo-1',
+      name: 'improve-dashboard',
+      setupDecision: 'run'
+    })
+
+    expect(result).toEqual({
+      worktree: expect.objectContaining({
+        repoId: 'repo-1',
+        path: '/workspace/improve-dashboard',
+        branch: 'improve-dashboard'
+      })
+    })
+    expect(mainWindow.webContents.send).toHaveBeenCalledWith('worktrees:changed', {
+      repoId: 'repo-1'
+    })
+  })
+
+  it('rejects ask-policy creates before mutating git state when setup decision is missing', async () => {
+    getEffectiveHooksMock.mockReturnValue({
+      scripts: {
+        setup: 'pnpm worktree:setup'
+      }
+    })
+    shouldRunSetupForCreateMock.mockImplementation(() => {
+      throw new Error('Setup decision required for this repository')
+    })
+
+    await expect(
+      handlers['worktrees:create'](null, {
+        repoId: 'repo-1',
+        name: 'improve-dashboard'
+      })
+    ).rejects.toThrow('Setup decision required for this repository')
+
+    expect(addWorktreeMock).not.toHaveBeenCalled()
+    expect(store.setWorktreeMeta).not.toHaveBeenCalled()
+    expect(createSetupRunnerScriptMock).not.toHaveBeenCalled()
   })
 })

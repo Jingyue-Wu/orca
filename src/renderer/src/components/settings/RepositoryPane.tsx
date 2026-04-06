@@ -1,30 +1,76 @@
 import { useState } from 'react'
-import type { OrcaHooks, Repo, RepoHookSettings } from '../../../../shared/types'
+import type { OrcaHooks, Repo, RepoHookSettings, SetupRunPolicy } from '../../../../shared/types'
 import { REPO_COLORS } from '../../../../shared/constants'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
 import { Label } from '../ui/label'
 import { Separator } from '../ui/separator'
 import { Trash2 } from 'lucide-react'
-import { HookEditor } from './HookEditor'
 import { DEFAULT_REPO_HOOK_SETTINGS } from './SettingsConstants'
-import type { HookName } from './SettingsConstants'
 import { BaseRefPicker } from './BaseRefPicker'
+import { RepositoryHooksSection } from './RepositoryHooksSection'
+import { SearchableSetting } from './SearchableSetting'
+import { matchesSettingsSearch, type SettingsSearchEntry } from './settings-search'
+import { useAppStore } from '../../store'
 
 type RepositoryPaneProps = {
   repo: Repo
   yamlHooks: OrcaHooks | null
+  hasHooksFile: boolean
   updateRepo: (repoId: string, updates: Partial<Repo>) => void
   removeRepo: (repoId: string) => void
+}
+
+export function getRepositoryPaneSearchEntries(repo: Repo): SettingsSearchEntry[] {
+  return [
+    {
+      title: 'Display Name',
+      description: 'Repo-specific display details for the sidebar and tabs.',
+      keywords: [repo.displayName, repo.path, 'repository name']
+    },
+    {
+      title: 'Badge Color',
+      description: 'Repo color used in the sidebar and tabs.',
+      keywords: [repo.displayName, 'color', 'badge']
+    },
+    {
+      title: 'Default Worktree Base',
+      description: 'Default base branch or ref when creating worktrees.',
+      keywords: [repo.displayName, 'base ref', 'branch']
+    },
+    {
+      title: 'Remove Repo',
+      description: 'Remove this repository from Orca.',
+      keywords: [repo.displayName, 'delete', 'repository']
+    },
+    {
+      title: 'orca.yaml hooks',
+      description: 'Shared setup and archive hook commands for this repository.',
+      keywords: [repo.displayName, 'hooks', 'setup', 'archive', 'yaml']
+    },
+    {
+      title: 'Legacy Repo-Local Hooks',
+      description: 'Older setup and archive hook scripts stored in local repo settings.',
+      keywords: [repo.displayName, 'legacy', 'fallback', 'hooks']
+    },
+    {
+      title: 'When to Run Setup',
+      description: 'Choose the default behavior when a setup command is available.',
+      keywords: [repo.displayName, 'setup run policy', 'ask', 'run by default', 'skip by default']
+    }
+  ]
 }
 
 export function RepositoryPane({
   repo,
   yamlHooks,
+  hasHooksFile,
   updateRepo,
   removeRepo
 }: RepositoryPaneProps): React.JSX.Element {
+  const searchQuery = useAppStore((state) => state.settingsSearchQuery)
   const [confirmingRemove, setConfirmingRemove] = useState<string | null>(null)
+  const [copiedTemplate, setCopiedTemplate] = useState(false)
 
   const handleRemoveRepo = (repoId: string) => {
     if (confirmingRemove === repoId) {
@@ -37,19 +83,15 @@ export function RepositoryPane({
   }
 
   const updateSelectedRepoHookSettings = (
-    updates: Omit<Partial<RepoHookSettings>, 'scripts'> & {
-      scripts?: Partial<RepoHookSettings['scripts']>
-    }
+    updates: Partial<Pick<RepoHookSettings, 'setupRunPolicy'>>
   ) => {
+    // Why: persisted repos may still carry legacy UI hook fields from the old dual-source
+    // design. We preserve them when saving so existing local state stays loadable, but the
+    // product now treats `orca.yaml` as the only supported hook definition surface.
     const nextSettings: RepoHookSettings = {
       ...DEFAULT_REPO_HOOK_SETTINGS,
       ...repo.hookSettings,
-      ...updates,
-      scripts: {
-        ...DEFAULT_REPO_HOOK_SETTINGS.scripts,
-        ...repo.hookSettings?.scripts,
-        ...updates.scripts
-      }
+      ...updates
     }
 
     updateRepo(repo.id, {
@@ -57,30 +99,73 @@ export function RepositoryPane({
     })
   }
 
-  return (
-    <div className="space-y-8">
-      <section className="space-y-6">
+  const handleCopyTemplate = async () => {
+    // Why: the missing-`orca.yaml` state is a migration aid, so copying the shared-template
+    // snippet should be one click rather than forcing users to reconstruct the expected shape.
+    await window.api.ui.writeClipboardText(`scripts:
+  setup: |
+    pnpm worktree:setup
+  archive: |
+    echo "Cleaning up before archive"`)
+    setCopiedTemplate(true)
+    window.setTimeout(() => setCopiedTemplate(false), 1500)
+  }
+
+  const handleClearLegacyHooks = () => {
+    // Why: legacy repo-local commands are still honored as a compatibility fallback.
+    // Keep them visible and removable here so the settings surface matches runtime behavior.
+    updateRepo(repo.id, {
+      hookSettings: {
+        ...DEFAULT_REPO_HOOK_SETTINGS,
+        ...repo.hookSettings,
+        scripts: {
+          ...DEFAULT_REPO_HOOK_SETTINGS.scripts,
+          setup: '',
+          archive: ''
+        }
+      }
+    })
+  }
+
+  const allEntries = getRepositoryPaneSearchEntries(repo)
+  const identityEntries = allEntries.slice(0, 4)
+  const hooksEntries = allEntries.slice(4)
+
+  const visibleSections = [
+    matchesSettingsSearch(searchQuery, identityEntries) ? (
+      <section key="identity" className="space-y-6">
         <div className="flex items-start justify-between gap-4">
           <div className="space-y-1">
-            <h2 className="text-sm font-semibold">Identity</h2>
+            <h3 className="text-sm font-semibold">Identity</h3>
             <p className="text-xs text-muted-foreground">
               Repo-specific display details for the sidebar and tabs.
             </p>
           </div>
 
-          <Button
-            variant={confirmingRemove === repo.id ? 'destructive' : 'outline'}
-            size="sm"
-            onClick={() => handleRemoveRepo(repo.id)}
-            onBlur={() => setConfirmingRemove(null)}
-            className="gap-2"
+          <SearchableSetting
+            title="Remove Repo"
+            description="Remove this repository from Orca."
+            keywords={[repo.displayName, 'delete', 'repository']}
           >
-            <Trash2 className="size-3.5" />
-            {confirmingRemove === repo.id ? 'Confirm Remove' : 'Remove Repo'}
-          </Button>
+            <Button
+              variant={confirmingRemove === repo.id ? 'destructive' : 'outline'}
+              size="sm"
+              onClick={() => handleRemoveRepo(repo.id)}
+              onBlur={() => setConfirmingRemove(null)}
+              className="gap-2"
+            >
+              <Trash2 className="size-3.5" />
+              {confirmingRemove === repo.id ? 'Confirm Remove' : 'Remove Repo'}
+            </Button>
+          </SearchableSetting>
         </div>
 
-        <div className="space-y-2">
+        <SearchableSetting
+          title="Display Name"
+          description="Repo-specific display details for the sidebar and tabs."
+          keywords={[repo.displayName, repo.path, 'repository name']}
+          className="space-y-2"
+        >
           <Label>Display Name</Label>
           <Input
             value={repo.displayName}
@@ -91,9 +176,14 @@ export function RepositoryPane({
             }
             className="h-9 text-sm"
           />
-        </div>
+        </SearchableSetting>
 
-        <div className="space-y-2">
+        <SearchableSetting
+          title="Badge Color"
+          description="Repo color used in the sidebar and tabs."
+          keywords={[repo.displayName, 'color', 'badge']}
+          className="space-y-2"
+        >
           <Label>Badge Color</Label>
           <div className="flex flex-wrap gap-2">
             {REPO_COLORS.map((color) => (
@@ -110,9 +200,14 @@ export function RepositoryPane({
               />
             ))}
           </div>
-        </div>
+        </SearchableSetting>
 
-        <div className="space-y-3">
+        <SearchableSetting
+          title="Default Worktree Base"
+          description="Default base branch or ref when creating worktrees."
+          keywords={[repo.displayName, 'base ref', 'branch']}
+          className="space-y-3"
+        >
           <Label>Default Worktree Base</Label>
           <BaseRefPicker
             repoId={repo.id}
@@ -120,86 +215,33 @@ export function RepositoryPane({
             onSelect={(ref) => updateRepo(repo.id, { worktreeBaseRef: ref })}
             onUsePrimary={() => updateRepo(repo.id, { worktreeBaseRef: undefined })}
           />
-        </div>
+        </SearchableSetting>
       </section>
+    ) : null,
+    matchesSettingsSearch(searchQuery, hooksEntries) ? (
+      <RepositoryHooksSection
+        key="hooks"
+        repo={repo}
+        yamlHooks={yamlHooks}
+        hasHooksFile={hasHooksFile}
+        copiedTemplate={copiedTemplate}
+        onCopyTemplate={() => void handleCopyTemplate()}
+        onClearLegacyHooks={handleClearLegacyHooks}
+        onUpdateSetupRunPolicy={(policy) =>
+          updateSelectedRepoHookSettings({ setupRunPolicy: policy as SetupRunPolicy })
+        }
+      />
+    ) : null
+  ].filter(Boolean)
 
-      <Separator />
-
-      <section className="space-y-4">
-        <div className="space-y-1">
-          <h2 className="text-sm font-semibold">Hook Source</h2>
-          <p className="text-xs text-muted-foreground">
-            Auto prefers `orca.yaml` when present, then falls back to the UI script. Override
-            ignores YAML and only uses the UI script.
-          </p>
+  return (
+    <div className="space-y-8">
+      {visibleSections.map((section, index) => (
+        <div key={index} className="space-y-8">
+          {index > 0 ? <Separator /> : null}
+          {section}
         </div>
-
-        <div className="flex w-fit gap-1 rounded-xl border border-border/50 p-1">
-          {(['auto', 'override'] as const).map((mode) => (
-            <button
-              key={mode}
-              onClick={() => updateSelectedRepoHookSettings({ mode })}
-              className={`rounded-lg px-3 py-1.5 text-sm transition-colors ${
-                repo.hookSettings?.mode === mode
-                  ? 'bg-accent font-medium text-accent-foreground'
-                  : 'text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              {mode === 'auto' ? 'Use YAML First' : 'Override in UI'}
-            </button>
-          ))}
-        </div>
-
-        <div className="rounded-xl border border-dashed bg-muted/30 p-3 text-xs text-muted-foreground">
-          {yamlHooks ? (
-            <div className="space-y-2">
-              <p className="font-medium text-foreground">YAML hooks detected in `orca.yaml`</p>
-              <div className="flex flex-wrap gap-2">
-                {(['setup', 'archive'] as HookName[]).map((hookName) =>
-                  yamlHooks.scripts[hookName] ? (
-                    <span
-                      key={hookName}
-                      className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-1 text-[10px] font-medium uppercase tracking-[0.18em] text-emerald-700 dark:text-emerald-300"
-                    >
-                      {hookName}
-                    </span>
-                  ) : null
-                )}
-              </div>
-            </div>
-          ) : (
-            <p>No YAML hooks detected for this repo.</p>
-          )}
-        </div>
-      </section>
-
-      <Separator />
-
-      <section className="space-y-4">
-        <div className="space-y-1">
-          <h2 className="text-sm font-semibold">Lifecycle Hooks</h2>
-          <p className="text-xs text-muted-foreground">
-            Write scripts directly in the UI. Each repo stores its own setup and archive hook
-            script.
-          </p>
-        </div>
-
-        <div className="space-y-4">
-          {(['setup', 'archive'] as HookName[]).map((hookName) => (
-            <HookEditor
-              key={hookName}
-              hookName={hookName}
-              repo={repo}
-              yamlHooks={yamlHooks}
-              onScriptChange={(script) =>
-                updateSelectedRepoHookSettings({
-                  scripts: hookName === 'setup' ? { setup: script } : { archive: script }
-                })
-              }
-            />
-          ))}
-        </div>
-      </section>
+      ))}
     </div>
   )
 }

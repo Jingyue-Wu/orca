@@ -3,6 +3,103 @@ import type { Worktree, Repo, TerminalTab } from '../../../../shared/types'
 
 type SortBy = 'name' | 'recent' | 'repo'
 
+type PRCacheEntry = { data: object | null; fetchedAt: number }
+export type RecentSortOverride = {
+  worktree: Worktree
+  tabs: TerminalTab[]
+  hasRecentPRSignal: boolean
+}
+
+function branchDisplayName(branch: string): string {
+  return branch.replace(/^refs\/heads\//, '')
+}
+
+export function hasRecentPRSignal(
+  worktree: Worktree,
+  repoMap: Map<string, Repo>,
+  prCache: Record<string, PRCacheEntry> | null
+): boolean {
+  const repo = repoMap.get(worktree.repoId)
+  const branch = branchDisplayName(worktree.branch)
+  if (!repo || !branch) {
+    return worktree.linkedPR !== null
+  }
+
+  const cacheKey = `${repo.path}::${branch}`
+  const cachedEntry = prCache?.[cacheKey]
+  if (cachedEntry) {
+    return Boolean(cachedEntry.data)
+  }
+
+  return worktree.linkedPR !== null
+}
+
+function computeSmartScoreFromSignals(
+  worktree: Worktree,
+  tabs: TerminalTab[],
+  hasRecentPR: boolean,
+  now: number
+): number {
+  const liveTabs = tabs.filter((t) => t.ptyId)
+
+  let score = 0
+
+  const isRunning = liveTabs.some((t) => detectAgentStatusFromTitle(t.title) === 'working')
+  if (isRunning) {
+    score += 60
+  }
+
+  const needsAttention = liveTabs.some((t) => detectAgentStatusFromTitle(t.title) === 'permission')
+  if (needsAttention) {
+    score += 35
+  }
+
+  if (worktree.isUnread) {
+    score += 18
+  }
+
+  if (liveTabs.length > 0) {
+    score += 12
+  }
+
+  if (hasRecentPR) {
+    score += 10
+  }
+
+  if (worktree.linkedIssue !== null) {
+    score += 6
+  }
+
+  const activityAge = now - (worktree.lastActivityAt || 0)
+  if (worktree.lastActivityAt > 0) {
+    const ONE_DAY = 24 * 60 * 60 * 1000
+    // Why 36: a just-created worktree has only this signal (no live tab yet,
+    // since the PTY spawns asynchronously after creation). Weight must exceed
+    // the max passive-signal combination for shutdown worktrees
+    // (isUnread 18 + PR 10 + issue 6 = 34) so brand-new worktrees always
+    // appear at the top of the "recent" sort immediately.
+    score += 36 * Math.max(0, 1 - activityAge / ONE_DAY)
+  }
+
+  return score
+}
+
+function getRecentSortCandidate(
+  worktree: Worktree,
+  tabsByWorktree: Record<string, TerminalTab[]> | null,
+  repoMap: Map<string, Repo>,
+  prCache: Record<string, PRCacheEntry> | null,
+  recentSortOverrides: Record<string, RecentSortOverride> | null
+): RecentSortOverride {
+  return (
+    recentSortOverrides?.[worktree.id] ?? {
+      worktree,
+      tabs: tabsByWorktree?.[worktree.id] ?? [],
+      hasRecentPRSignal: hasRecentPRSignal(worktree, repoMap, prCache)
+    }
+  )
+}
+
 /**
  * Build a comparator for sorting worktrees based on the current sort mode.
  */
@@ -10,17 +107,44 @@ export function buildWorktreeComparator(
   sortBy: SortBy,
   tabsByWorktree: Record<string, TerminalTab[]> | null,
   repoMap: Map<string, Repo>,
-  now: number = Date.now()
+  prCache: Record<string, PRCacheEntry> | null,
+  now: number = Date.now(),
+  recentSortOverrides: Record<string, RecentSortOverride> | null = null
 ): (a: Worktree, b: Worktree) => number {
   return (a, b) => {
     switch (sortBy) {
       case 'name':
         return a.displayName.localeCompare(b.displayName)
       case 'recent': {
+        const recentA = getRecentSortCandidate(
+          a,
+          tabsByWorktree,
+          repoMap,
+          prCache,
+          recentSortOverrides
+        )
+        const recentB = getRecentSortCandidate(
+          b,
+          tabsByWorktree,
+          repoMap,
+          prCache,
+          recentSortOverrides
+        )
         // Recent means meaningful recent work, not selection time.
         return (
-          computeSmartScore(b, tabsByWorktree, now) - computeSmartScore(a, tabsByWorktree, now) ||
-          b.lastActivityAt - a.lastActivityAt ||
+          computeSmartScoreFromSignals(
+            recentB.worktree,
+            recentB.tabs,
+            recentB.hasRecentPRSignal,
+            now
+          ) -
+            computeSmartScoreFromSignals(
+              recentA.worktree,
+              recentA.tabs,
+              recentA.hasRecentPRSignal,
+              now
+            ) ||
+          recentB.worktree.lastActivityAt - recentA.worktree.lastActivityAt ||
           a.displayName.localeCompare(b.displayName)
         )
       }
@@ -42,60 +166,28 @@ export function buildWorktreeComparator(
  *
  * Scoring:
  *   running AI job    → +60
+ *   recent activity   → +36 (decays over 24 hours)
  *   needs attention   → +35
  *   unread            → +18
  *   open terminal     → +12
- *   linked PR         → +10
+ *   live branch PR    → +10
  *   linked issue      → +6
- *   recent activity   → +24 (decays over 24 hours)
  */
 export function computeSmartScore(
   worktree: Worktree,
   tabsByWorktree: Record<string, TerminalTab[]> | null,
+  repoMap: Map<string, Repo> | null,
+  prCache: Record<string, PRCacheEntry> | null,
   now: number = Date.now()
 ): number {
-  const tabs = tabsByWorktree?.[worktree.id] ?? []
-  const liveTabs = tabs.filter((t) => t.ptyId)
-
-  let score = 0
-
-  // Running: any live PTY with an AI agent actively working
-  const isRunning = liveTabs.some((t) => detectAgentStatusFromTitle(t.title) === 'working')
-  if (isRunning) {
-    score += 60
-  }
-
-  // Needs attention: permission prompt in a live agent terminal
-  const needsAttention = liveTabs.some((t) => detectAgentStatusFromTitle(t.title) === 'permission')
-  if (needsAttention) {
-    score += 35
-  }
-
-  // Unread
-  if (worktree.isUnread) {
-    score += 18
-  }
-
-  // Live terminals are a strong sign of ongoing work, even if no agent title is detected.
-  if (liveTabs.length > 0) {
-    score += 12
-  }
-
-  if (worktree.linkedPR !== null) {
-    score += 10
-  }
-
-  if (worktree.linkedIssue !== null) {
-    score += 6
-  }
-
-  // Recent meaningful activity should stay relevant for the rest of the day,
-  // not vanish after an hour.
-  const activityAge = now - (worktree.lastActivityAt || 0)
-  if (worktree.lastActivityAt > 0) {
-    const ONE_DAY = 24 * 60 * 60 * 1000
-    score += 24 * Math.max(0, 1 - activityAge / ONE_DAY)
-  }
-
-  return score
+  return computeSmartScoreFromSignals(
+    worktree,
+    tabsByWorktree?.[worktree.id] ?? [],
+    // Why: branch-aware PR cache is the freshest signal, but off-screen
+    // worktrees may not have fetched it yet. Fall back to persisted linkedPR
+    // only while that branch cache entry is still cold so recent sorting stays
+    // stable on launch without reviving stale PRs after a cache miss resolves.
+    repoMap ? hasRecentPRSignal(worktree, repoMap, prCache) : worktree.linkedPR !== null,
+    now
+  )
 }

@@ -2,7 +2,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   ChevronDown,
-  Layers,
   Minus,
   Plus,
   RefreshCw,
@@ -39,6 +38,10 @@ import {
   DialogTitle
 } from '@/components/ui/dialog'
 import { BaseRefPicker } from '@/components/settings/BaseRefPicker'
+import {
+  notifyEditorExternalFileChange,
+  requestEditorSaveQuiesce
+} from '@/components/editor/editor-autosave'
 import { PullRequestIcon } from './checks-helpers'
 import type {
   GitBranchChangeEntry,
@@ -97,6 +100,7 @@ export default function SourceControl(): React.JSX.Element {
   const gitBranchChangesByWorktree = useAppStore((s) => s.gitBranchChangesByWorktree)
   const gitBranchCompareSummaryByWorktree = useAppStore((s) => s.gitBranchCompareSummaryByWorktree)
   const prCache = useAppStore((s) => s.prCache)
+  const fetchPRForBranch = useAppStore((s) => s.fetchPRForBranch)
   const updateRepo = useAppStore((s) => s.updateRepo)
   const beginGitBranchCompareRequest = useAppStore((s) => s.beginGitBranchCompareRequest)
   const setGitBranchCompareResult = useAppStore((s) => s.setGitBranchCompareResult)
@@ -179,6 +183,18 @@ export default function SourceControl(): React.JSX.Element {
   const branchName = activeWorktree?.branch.replace(/^refs\/heads\//, '') ?? 'HEAD'
   const prCacheKey = activeRepo && branchName ? `${activeRepo.path}::${branchName}` : null
   const prInfo: PRInfo | null = prCacheKey ? (prCache[prCacheKey]?.data ?? null) : null
+
+  useEffect(() => {
+    if (!isBranchVisible || !activeRepo || !branchName || branchName === 'HEAD') {
+      return
+    }
+
+    // Why: the Source Control panel renders the branch's PR badge directly.
+    // When a terminal checkout moves this worktree onto a new branch, we need
+    // to fetch that branch's PR immediately instead of waiting for the user to
+    // reselect the worktree or open the separate Checks panel.
+    void fetchPRForBranch(activeRepo.path, branchName)
+  }, [activeRepo, branchName, fetchPRForBranch, isBranchVisible])
 
   const grouped = useMemo(() => {
     const groups = {
@@ -367,16 +383,29 @@ export default function SourceControl(): React.JSX.Element {
 
   const handleDiscard = useCallback(
     async (filePath: string) => {
-      if (!worktreePath) {
+      if (!worktreePath || !activeWorktreeId) {
         return
       }
       try {
+        // Why: git discard replaces the working tree version of this file. Any
+        // pending editor autosave must be quiesced first so it cannot recreate
+        // the discarded edits after git restores the file.
+        await requestEditorSaveQuiesce({
+          worktreeId: activeWorktreeId,
+          worktreePath,
+          relativePath: filePath
+        })
         await window.api.git.discard({ worktreePath, filePath })
+        notifyEditorExternalFileChange({
+          worktreeId: activeWorktreeId,
+          worktreePath,
+          relativePath: filePath
+        })
       } catch {
         // git operation failed silently
       }
     },
-    [worktreePath]
+    [activeWorktreeId, worktreePath]
   )
 
   if (!activeWorktree || !activeRepo || !worktreePath) {
@@ -520,19 +549,23 @@ export default function SourceControl(): React.JSX.Element {
                               }
                             }}
                           >
-                            Open non-conflict diffs
+                            View all
                           </Button>
                         ) : (
-                          <ActionButton
-                            icon={Layers}
-                            title="Open all diffs in this section"
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            className="h-auto px-1.5 py-0.5 text-xs text-muted-foreground hover:text-foreground"
                             onClick={(e) => {
                               e.stopPropagation()
                               if (activeWorktreeId && worktreePath) {
                                 openAllDiffs(activeWorktreeId, worktreePath, undefined, area)
                               }
                             }}
-                          />
+                          >
+                            View all
+                          </Button>
                         )
                       }
                     />
@@ -576,16 +609,20 @@ export default function SourceControl(): React.JSX.Element {
                 isCollapsed={collapsedSections.has('branch')}
                 onToggle={() => toggleSection('branch')}
                 actions={
-                  <ActionButton
-                    icon={Layers}
-                    title="Open all branch diffs"
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-auto px-1.5 py-0.5 text-xs text-muted-foreground hover:text-foreground"
                     onClick={(e) => {
                       e.stopPropagation()
                       if (activeWorktreeId && worktreePath && branchSummary) {
                         openBranchAllDiffs(activeWorktreeId, worktreePath, branchSummary)
                       }
                     }}
-                  />
+                  >
+                    View all
+                  </Button>
                 }
               />
               {!collapsedSections.has('branch') &&
@@ -930,12 +967,10 @@ function UncommittedEntryRow({
       >
         <StatusIcon className="size-3.5 shrink-0" style={{ color: STATUS_COLORS[entry.status] }} />
         <div className="min-w-0 flex-1 text-xs">
-          <div className="flex items-center gap-1.5">
-            <span className="min-w-0 truncate text-foreground">{fileName}</span>
-            {dirPath && (
-              <span className="truncate text-[11px] text-muted-foreground">{dirPath}</span>
-            )}
-          </div>
+          <span className="min-w-0 block truncate">
+            <span className="text-foreground">{fileName}</span>
+            {dirPath && <span className="ml-1.5 text-[11px] text-muted-foreground">{dirPath}</span>}
+          </span>
           {conflictLabel && (
             <div className="truncate text-[11px] text-muted-foreground">{conflictLabel}</div>
           )}
@@ -957,12 +992,6 @@ function UncommittedEntryRow({
               title={entry.area === 'untracked' ? 'Revert untracked file' : 'Discard changes'}
               onClick={(event) => {
                 event.stopPropagation()
-                if (
-                  entry.area === 'untracked' &&
-                  !window.confirm(`Delete untracked file "${entry.path}"? This cannot be undone.`)
-                ) {
-                  return
-                }
                 void onDiscard()
               }}
             />

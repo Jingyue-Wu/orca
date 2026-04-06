@@ -4,7 +4,7 @@
 import { execFileSync } from 'child_process'
 import { randomUUID } from 'crypto'
 import { rm } from 'fs/promises'
-import type { Repo } from '../../shared/types'
+import type { CreateWorktreeResult, Repo } from '../../shared/types'
 import type {
   RuntimeGraphStatus,
   RuntimeRepoSearchRefs,
@@ -26,7 +26,7 @@ import { listWorktrees } from '../git/worktree'
 import { getPRForBranch } from '../github/client'
 import { getGitUsername, getDefaultBaseRef, getBranchConflictKind } from '../git/repo'
 import { addWorktree, removeWorktree } from '../git/worktree'
-import { getEffectiveHooks, runHook } from '../hooks'
+import { createSetupRunnerScript, getEffectiveHooks, runHook } from '../hooks'
 import { REPO_COLORS } from '../../shared/constants'
 import { isGitRepo, getRepoName, searchBaseRefs } from '../git/repo'
 import type { Store } from '../persistence'
@@ -38,7 +38,8 @@ import {
   isOrphanedWorktreeError,
   mergeWorktree,
   sanitizeWorktreeName,
-  shouldSetDisplayName
+  shouldSetDisplayName,
+  areWorktreePathsEqual
 } from '../ipc/worktree-logic'
 
 type RuntimeStore = {
@@ -78,7 +79,7 @@ type RuntimePtyController = {
 type RuntimeNotifier = {
   worktreesChanged(repoId: string): void
   reposChanged(): void
-  activateWorktree(repoId: string, worktreeId: string): void
+  activateWorktree(repoId: string, worktreeId: string, setup?: CreateWorktreeResult['setup']): void
 }
 
 type TerminalHandleRecord = {
@@ -542,7 +543,7 @@ export class OrcaRuntimeService {
     baseBranch?: string
     linkedIssue?: number | null
     comment?: string
-  }) {
+  }): Promise<CreateWorktreeResult> {
     if (!this.store) {
       throw new Error('runtime_unavailable')
     }
@@ -590,12 +591,12 @@ export class OrcaRuntimeService {
 
     addWorktree(repo.path, worktreePath, branchName, baseBranch)
     const gitWorktrees = await listWorktrees(repo.path)
-    const created = gitWorktrees.find((gw) => gw.path === worktreePath)
+    const created = gitWorktrees.find((gw) => areWorktreePathsEqual(gw.path, worktreePath))
     if (!created) {
       throw new Error('Worktree created but not found in listing')
     }
 
-    const worktreeId = `${repo.id}::${worktreePath}`
+    const worktreeId = `${repo.id}::${created.path}`
     const meta = this.store.setWorktreeMeta(worktreeId, {
       lastActivityAt: Date.now(),
       ...(shouldSetDisplayName(requestedName, branchName, sanitizedName)
@@ -606,13 +607,29 @@ export class OrcaRuntimeService {
     })
     const worktree = mergeWorktree(repo.id, created, meta)
 
+    let setup: CreateWorktreeResult['setup']
     const hooks = getEffectiveHooks(repo)
     if (hooks?.scripts.setup) {
-      void runHook('setup', worktreePath, repo).then((result) => {
-        if (!result.success) {
-          console.error(`[hooks] setup hook failed for ${worktreePath}:`, result.output)
+      if (this.authoritativeWindowId !== null) {
+        try {
+          // Why: CLI-created worktrees must use the same runner-script path as the
+          // renderer create flow so repo-committed `orca.yaml` setup hooks run in
+          // the visible first terminal instead of a hidden background shell with
+          // different failure and prompt behavior.
+          setup = createSetupRunnerScript(repo, worktreePath, hooks.scripts.setup)
+        } catch (error) {
+          // Why: the git worktree is already real at this point. If runner
+          // generation fails, keep creation successful and surface the problem in
+          // logs rather than pretending the worktree was never created.
+          console.error(`[hooks] Failed to prepare setup runner for ${worktreePath}:`, error)
         }
-      })
+      } else {
+        void runHook('setup', worktreePath, repo).then((result) => {
+          if (!result.success) {
+            console.error(`[hooks] setup hook failed for ${worktreePath}:`, result.output)
+          }
+        })
+      }
     }
 
     this.notifier?.worktreesChanged(repo.id)
@@ -620,9 +637,12 @@ export class OrcaRuntimeService {
     // renderer-side consequence of activating a worktree. CLI-created
     // worktrees must trigger that same activation path or they will exist on
     // disk without becoming the active workspace in the UI.
-    this.notifier?.activateWorktree(repo.id, worktree.id)
+    this.notifier?.activateWorktree(repo.id, worktree.id, setup)
     this.invalidateResolvedWorktreeCache()
-    return worktree
+    return {
+      worktree,
+      ...(setup ? { setup } : {})
+    }
   }
 
   async updateManagedWorktreeMeta(
@@ -781,7 +801,10 @@ export class OrcaRuntimeService {
     } else if (selector.startsWith('path:')) {
       candidates = worktrees.filter((worktree) => worktree.path === selector.slice(5))
     } else if (selector.startsWith('branch:')) {
-      candidates = worktrees.filter((worktree) => worktree.branch === selector.slice(7))
+      const branchSelector = selector.slice(7)
+      candidates = worktrees.filter((worktree) =>
+        branchSelectorMatches(worktree.branch, branchSelector)
+      )
     } else if (selector.startsWith('issue:')) {
       candidates = worktrees.filter(
         (worktree) =>
@@ -790,7 +813,9 @@ export class OrcaRuntimeService {
     } else {
       candidates = worktrees.filter(
         (worktree) =>
-          worktree.id === selector || worktree.path === selector || worktree.branch === selector
+          worktree.id === selector ||
+          worktree.path === selector ||
+          branchSelectorMatches(worktree.branch, selector)
       )
     }
 
@@ -1127,6 +1152,18 @@ function buildTerminalWaitResult(handle: string, leaf: RuntimeLeafRecord): Runti
     status: getTerminalState(leaf),
     exitCode: leaf.lastExitCode
   }
+}
+
+function branchSelectorMatches(branch: string, selector: string): boolean {
+  // Why: Git worktree data can report local branches as either `refs/heads/foo`
+  // or `foo` depending on which plumbing path produced the record. Orca's
+  // branch selectors should accept either form so newly created worktrees stay
+  // discoverable without exposing internal ref-shape differences to users.
+  return normalizeBranchRef(branch) === normalizeBranchRef(selector)
+}
+
+function normalizeBranchRef(branch: string): string {
+  return branch.startsWith('refs/heads/') ? branch.slice('refs/heads/'.length) : branch
 }
 
 function normalizeTerminalChunk(chunk: string): string {

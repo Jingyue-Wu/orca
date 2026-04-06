@@ -1,6 +1,7 @@
 import { app, clipboard, ipcMain } from 'electron'
 import type { BrowserWindow } from 'electron'
 import type { Store } from '../persistence'
+import type { CreateWorktreeResult } from '../../shared/types'
 import { registerRepoHandlers } from '../ipc/repos'
 import { registerWorktreeHandlers } from '../ipc/worktrees'
 import { registerPtyHandlers } from '../ipc/pty'
@@ -55,9 +56,9 @@ function registerRuntimeWindowLifecycle(
         mainWindow.webContents.send('repos:changed')
       }
     },
-    activateWorktree: (repoId, worktreeId) => {
+    activateWorktree: (repoId, worktreeId, setup?: CreateWorktreeResult['setup']) => {
       if (!mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('ui:activateWorktree', { repoId, worktreeId })
+        mainWindow.webContents.send('ui:activateWorktree', { repoId, worktreeId, setup })
       }
     }
   })
@@ -74,15 +75,18 @@ function registerRuntimeWindowLifecycle(
 
 function registerFileDropRelay(mainWindow: BrowserWindow): void {
   ipcMain.removeAllListeners('terminal:file-dropped-from-preload')
-  ipcMain.on('terminal:file-dropped-from-preload', (_event, args: { paths: string[] }) => {
-    if (mainWindow.isDestroyed()) {
-      return
-    }
+  ipcMain.on(
+    'terminal:file-dropped-from-preload',
+    (_event, args: { paths: string[]; target: 'editor' | 'terminal' }) => {
+      if (mainWindow.isDestroyed()) {
+        return
+      }
 
-    for (const path of args.paths) {
-      mainWindow.webContents.send('terminal:file-drop', { path })
+      for (const path of args.paths) {
+        mainWindow.webContents.send('terminal:file-drop', { path, target: args.target })
+      }
     }
-  })
+  )
 }
 
 export function registerClipboardHandlers(): void {

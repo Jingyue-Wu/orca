@@ -10,12 +10,13 @@ import {
 import { Button } from '@/components/ui/button'
 import { AlertTriangle, LoaderCircle, Trash2 } from 'lucide-react'
 import { useAppStore } from '@/store'
+import { toast } from 'sonner'
+import { getDeleteWorktreeToastCopy } from './delete-worktree-toast'
 
 const DeleteWorktreeDialog = React.memo(function DeleteWorktreeDialog() {
   const activeModal = useAppStore((s) => s.activeModal)
   const modalData = useAppStore((s) => s.modalData)
   const closeModal = useAppStore((s) => s.closeModal)
-  const openModal = useAppStore((s) => s.openModal)
   const removeWorktree = useAppStore((s) => s.removeWorktree)
   const clearWorktreeDeleteState = useAppStore((s) => s.clearWorktreeDeleteState)
   const allWorktrees = useAppStore((s) => s.allWorktrees)
@@ -32,6 +33,7 @@ const DeleteWorktreeDialog = React.memo(function DeleteWorktreeDialog() {
   const isDeleting = deleteState?.isDeleting ?? false
   const deleteError = deleteState?.error ?? null
   const canForceDelete = deleteState?.canForceDelete ?? false
+  const worktreeName = worktree?.displayName ?? 'unknown'
 
   useEffect(() => {
     if (isOpen && worktreeId && !worktree && !isDeleting) {
@@ -42,31 +44,68 @@ const DeleteWorktreeDialog = React.memo(function DeleteWorktreeDialog() {
 
   const handleOpenChange = useCallback(
     (open: boolean) => {
-      if (open || isDeleting) {
+      if (open) {
         return
       }
-      if (worktreeId) {
+      const currentState = worktreeId
+        ? useAppStore.getState().deleteStateByWorktreeId[worktreeId]
+        : undefined
+      if (worktreeId && !currentState?.isDeleting) {
         clearWorktreeDeleteState(worktreeId)
       }
       closeModal()
     },
-    [clearWorktreeDeleteState, closeModal, isDeleting, worktreeId]
+    [clearWorktreeDeleteState, closeModal, worktreeId]
   )
 
   const handleDelete = useCallback(
-    async (force = false) => {
+    (force = false) => {
       if (!worktreeId) {
         return
       }
+      const targetWorktreeId = worktreeId
+      removeWorktree(targetWorktreeId, force)
+        .then((result) => {
+          if (!result.ok) {
+            const state = useAppStore.getState().deleteStateByWorktreeId[targetWorktreeId]
+            const toastCopy = getDeleteWorktreeToastCopy(
+              worktreeName,
+              state?.canForceDelete ?? false,
+              result.error
+            )
+            const showToast = toastCopy.isDestructive ? toast.error : toast.info
+            showToast(toastCopy.title, {
+              description: toastCopy.description,
+              duration: 10000,
+              action: state?.canForceDelete
+                ? {
+                    label: 'Force Delete',
+                    onClick: () => {
+                      removeWorktree(targetWorktreeId, true)
+                        .then((forceResult) => {
+                          if (!forceResult.ok) {
+                            toast.error('Force delete failed', { description: forceResult.error })
+                          }
+                        })
+                        .catch((err: unknown) => {
+                          toast.error('Failed to delete worktree', {
+                            description: err instanceof Error ? err.message : String(err)
+                          })
+                        })
+                    }
+                  }
+                : undefined
+            })
+          }
+        })
+        .catch((err: unknown) => {
+          toast.error('Failed to delete worktree', {
+            description: err instanceof Error ? err.message : String(err)
+          })
+        })
       closeModal()
-      const result = await removeWorktree(worktreeId, force)
-      if (!result.ok) {
-        openModal('delete-worktree', { worktreeId })
-        return
-      }
-      clearWorktreeDeleteState(worktreeId)
     },
-    [clearWorktreeDeleteState, closeModal, openModal, removeWorktree, worktreeId]
+    [closeModal, removeWorktree, worktreeId, worktreeName]
   )
 
   return (

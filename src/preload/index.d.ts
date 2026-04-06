@@ -4,6 +4,8 @@ import type {
   Repo,
   Worktree,
   WorktreeMeta,
+  CreateWorktreeArgs,
+  CreateWorktreeResult,
   PRInfo,
   PRCheckDetail,
   IssueInfo,
@@ -11,6 +13,7 @@ import type {
   OrcaHooks,
   PersistedUIState,
   WorkspaceSessionState,
+  WorktreeSetupLaunch,
   UpdateStatus,
   DirEntry,
   GitBranchCompareResult,
@@ -40,14 +43,19 @@ type ReposApi = {
 type WorktreesApi = {
   list: (args: { repoId: string }) => Promise<Worktree[]>
   listAll: () => Promise<Worktree[]>
-  create: (args: { repoId: string; name: string; baseBranch?: string }) => Promise<Worktree>
+  create: (args: CreateWorktreeArgs) => Promise<CreateWorktreeResult>
   remove: (args: { worktreeId: string; force?: boolean }) => Promise<void>
   updateMeta: (args: { worktreeId: string; updates: Partial<WorktreeMeta> }) => Promise<Worktree>
   onChanged: (callback: (data: { repoId: string }) => void) => () => void
 }
 
 type PtyApi = {
-  spawn: (opts: { cols: number; rows: number; cwd?: string }) => Promise<{ id: string }>
+  spawn: (opts: {
+    cols: number
+    rows: number
+    cwd?: string
+    env?: Record<string, string>
+  }) => Promise<{ id: string }>
   write: (id: string, data: string) => void
   resize: (id: string, cols: number, rows: number) => void
   kill: (id: string) => Promise<void>
@@ -62,7 +70,8 @@ type GhApi = {
   prChecks: (args: {
     repoPath: string
     prNumber: number
-    branch?: string
+    headSha?: string
+    noCache?: boolean
   }) => Promise<PRCheckDetail[]>
   updatePRTitle: (args: { repoPath: string; prNumber: number; title: string }) => Promise<boolean>
   mergePR: (args: {
@@ -90,6 +99,8 @@ type ShellApi = {
   openFilePath: (path: string) => Promise<void>
   openFileUri: (uri: string) => Promise<void>
   pathExists: (path: string) => Promise<boolean>
+  pickImage: () => Promise<string | null>
+  copyFile: (args: { srcPath: string; destPath: string }) => Promise<void>
 }
 
 type HooksApi = {
@@ -130,12 +141,14 @@ type UIApi = {
   set: (args: Partial<PersistedUIState>) => Promise<void>
   onOpenSettings: (callback: () => void) => () => void
   onActivateWorktree: (
-    callback: (data: { repoId: string; worktreeId: string }) => void
+    callback: (data: { repoId: string; worktreeId: string; setup?: WorktreeSetupLaunch }) => void
   ) => () => void
   onTerminalZoom: (callback: (direction: 'in' | 'out' | 'reset') => void) => () => void
   readClipboardText: () => Promise<string>
   writeClipboardText: (text: string) => Promise<void>
-  onFileDrop: (callback: (data: { path: string }) => void) => () => void
+  onFileDrop: (
+    callback: (data: { path: string; target: 'editor' | 'terminal' }) => void
+  ) => () => void
   getZoomLevel: () => number
   setZoomLevel: (level: number) => void
   onFullscreenChanged: (callback: (isFullScreen: boolean) => void) => () => void

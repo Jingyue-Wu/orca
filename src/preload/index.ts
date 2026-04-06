@@ -1,7 +1,26 @@
+/* eslint-disable max-lines -- Why: the preload bridge is the audited contract between
+renderer and Electron. Keeping the IPC surface co-located in one file makes security
+review and type drift checks easier than scattering these bindings across modules. */
 import { contextBridge, ipcRenderer, webFrame, webUtils } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
 import type { CliInstallStatus } from '../shared/cli-install-types'
 import type { RuntimeStatus, RuntimeSyncWindowGraph } from '../shared/runtime-types'
+
+type NativeFileDropTarget = 'editor' | 'terminal'
+
+function getNativeFileDropTarget(event: DragEvent): NativeFileDropTarget | null {
+  const path = event.composedPath()
+  for (const entry of path) {
+    if (!(entry instanceof HTMLElement)) {
+      continue
+    }
+    const target = entry.dataset.nativeFileDropTarget
+    if (target === 'editor' || target === 'terminal') {
+      return target
+    }
+  }
+  return null
+}
 
 // ---------------------------------------------------------------------------
 // File drag-and-drop: handled here in the preload because webUtils (which
@@ -11,6 +30,11 @@ import type { RuntimeStatus, RuntimeSyncWindowGraph } from '../shared/runtime-ty
 document.addEventListener(
   'dragover',
   (e) => {
+    // Let in-app drags (e.g. file explorer drag-to-move) through to React handlers
+    // so they can set their own dropEffect. Only override for native OS file drops.
+    if (e.dataTransfer?.types.includes('text/x-orca-file-path')) {
+      return
+    }
     e.preventDefault()
     if (e.dataTransfer) {
       e.dataTransfer.dropEffect = 'copy'
@@ -33,6 +57,7 @@ document.addEventListener(
     if (!files || files.length === 0) {
       return
     }
+    const target = getNativeFileDropTarget(e)
 
     const paths: string[] = []
     for (let i = 0; i < files.length; i++) {
@@ -44,7 +69,16 @@ document.addEventListener(
     }
 
     if (paths.length > 0) {
-      ipcRenderer.send('terminal:file-dropped-from-preload', { paths })
+      // Why: native OS file drops must be classified before the event crosses
+      // into the isolated renderer; otherwise every drop looks identical and we
+      // cannot distinguish "open this in Orca's editor" from "send this path to
+      // the active coding CLI". Falls back to 'editor' so drops on surfaces
+      // without an explicit marker (sidebar, editor body, etc.) preserve the
+      // prior open-in-editor behavior instead of being silently discarded.
+      ipcRenderer.send('terminal:file-dropped-from-preload', {
+        paths,
+        target: target ?? 'editor'
+      })
     }
   },
   true
@@ -86,8 +120,12 @@ const api = {
 
     listAll: (): Promise<unknown[]> => ipcRenderer.invoke('worktrees:listAll'),
 
-    create: (args: { repoId: string; name: string; baseBranch?: string }): Promise<unknown> =>
-      ipcRenderer.invoke('worktrees:create', args),
+    create: (args: {
+      repoId: string
+      name: string
+      baseBranch?: string
+      setupDecision?: 'inherit' | 'run' | 'skip'
+    }): Promise<unknown> => ipcRenderer.invoke('worktrees:create', args),
 
     remove: (args: { worktreeId: string; force?: boolean }): Promise<void> =>
       ipcRenderer.invoke('worktrees:remove', args),
@@ -106,8 +144,12 @@ const api = {
   },
 
   pty: {
-    spawn: (opts: { cols: number; rows: number; cwd?: string }): Promise<{ id: string }> =>
-      ipcRenderer.invoke('pty:spawn', opts),
+    spawn: (opts: {
+      cols: number
+      rows: number
+      cwd?: string
+      env?: Record<string, string>
+    }): Promise<{ id: string }> => ipcRenderer.invoke('pty:spawn', opts),
 
     write: (id: string, data: string): void => {
       ipcRenderer.send('pty:write', { id, data })
@@ -144,8 +186,12 @@ const api = {
     listIssues: (args: { repoPath: string; limit?: number }): Promise<unknown[]> =>
       ipcRenderer.invoke('gh:listIssues', args),
 
-    prChecks: (args: { repoPath: string; prNumber: number; branch?: string }): Promise<unknown[]> =>
-      ipcRenderer.invoke('gh:prChecks', args),
+    prChecks: (args: {
+      repoPath: string
+      prNumber: number
+      headSha?: string
+      noCache?: boolean
+    }): Promise<unknown[]> => ipcRenderer.invoke('gh:prChecks', args),
 
     updatePRTitle: (args: {
       repoPath: string
@@ -185,7 +231,12 @@ const api = {
 
     openFileUri: (uri: string): Promise<void> => ipcRenderer.invoke('shell:openFileUri', uri),
 
-    pathExists: (path: string): Promise<boolean> => ipcRenderer.invoke('shell:pathExists', path)
+    pathExists: (path: string): Promise<boolean> => ipcRenderer.invoke('shell:pathExists', path),
+
+    pickImage: (): Promise<string | null> => ipcRenderer.invoke('shell:pickImage'),
+
+    copyFile: (args: { srcPath: string; destPath: string }): Promise<void> =>
+      ipcRenderer.invoke('shell:copyFile', args)
   },
 
   hooks: {
@@ -310,11 +361,19 @@ const api = {
       return () => ipcRenderer.removeListener('ui:openSettings', listener)
     },
     onActivateWorktree: (
-      callback: (data: { repoId: string; worktreeId: string }) => void
+      callback: (data: {
+        repoId: string
+        worktreeId: string
+        setup?: { runnerScriptPath: string; envVars: Record<string, string> }
+      }) => void
     ): (() => void) => {
       const listener = (
         _event: Electron.IpcRendererEvent,
-        data: { repoId: string; worktreeId: string }
+        data: {
+          repoId: string
+          worktreeId: string
+          setup?: { runnerScriptPath: string; envVars: Record<string, string> }
+        }
       ) => callback(data)
       ipcRenderer.on('ui:activateWorktree', listener)
       return () => ipcRenderer.removeListener('ui:activateWorktree', listener)
@@ -328,8 +387,13 @@ const api = {
     readClipboardText: (): Promise<string> => ipcRenderer.invoke('clipboard:readText'),
     writeClipboardText: (text: string): Promise<void> =>
       ipcRenderer.invoke('clipboard:writeText', text),
-    onFileDrop: (callback: (data: { path: string }) => void): (() => void) => {
-      const listener = (_event: Electron.IpcRendererEvent, data: { path: string }) => callback(data)
+    onFileDrop: (
+      callback: (data: { path: string; target: 'editor' | 'terminal' }) => void
+    ): (() => void) => {
+      const listener = (
+        _event: Electron.IpcRendererEvent,
+        data: { path: string; target: 'editor' | 'terminal' }
+      ) => callback(data)
       ipcRenderer.on('terminal:file-drop', listener)
       return () => ipcRenderer.removeListener('terminal:file-drop', listener)
     },
