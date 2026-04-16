@@ -7,6 +7,7 @@ import { dirname, joinPath } from '@/lib/path'
 import { getConnectionId } from '@/lib/connection-context'
 import type { InlineInput } from './FileExplorerRow'
 import type { TreeNode } from './file-explorer-types'
+import { commitFileExplorerOp } from './fileExplorerUndoRedo'
 
 /**
  * Electron's ipcRenderer.invoke wraps errors as:
@@ -123,11 +124,23 @@ export function useFileExplorerInlineInput({
         const connectionId = getConnectionId(activeWorktreeId ?? null) ?? undefined
         if (inlineInput.type === 'rename' && inlineInput.existingPath) {
           const parentDir = dirname(inlineInput.existingPath)
+          const oldPath = inlineInput.existingPath
+          const newPath = joinPath(parentDir, name)
           try {
             await window.api.fs.rename({
-              oldPath: inlineInput.existingPath,
-              newPath: joinPath(parentDir, name),
+              oldPath,
+              newPath,
               connectionId
+            })
+            commitFileExplorerOp({
+              undo: async () => {
+                await window.api.fs.rename({ oldPath: newPath, newPath: oldPath, connectionId })
+                await refreshDir(parentDir)
+              },
+              redo: async () => {
+                await window.api.fs.rename({ oldPath: oldPath, newPath: newPath, connectionId })
+                await refreshDir(parentDir)
+              }
             })
           } catch (err) {
             toast.error(
@@ -141,6 +154,30 @@ export function useFileExplorerInlineInput({
             await (inlineInput.type === 'folder'
               ? window.api.fs.createDir({ dirPath: fullPath, connectionId })
               : window.api.fs.createFile({ filePath: fullPath, connectionId }))
+            const parentForRefresh = inlineInput.parentPath
+            if (inlineInput.type === 'folder') {
+              commitFileExplorerOp({
+                undo: async () => {
+                  await window.api.fs.deletePath({ targetPath: fullPath, connectionId })
+                  await refreshDir(parentForRefresh)
+                },
+                redo: async () => {
+                  await window.api.fs.createDir({ dirPath: fullPath, connectionId })
+                  await refreshDir(parentForRefresh)
+                }
+              })
+            } else {
+              commitFileExplorerOp({
+                undo: async () => {
+                  await window.api.fs.deletePath({ targetPath: fullPath, connectionId })
+                  await refreshDir(parentForRefresh)
+                },
+                redo: async () => {
+                  await window.api.fs.createFile({ filePath: fullPath, connectionId })
+                  await refreshDir(parentForRefresh)
+                }
+              })
+            }
             await refreshDir(inlineInput.parentPath)
             if (inlineInput.type === 'file') {
               openFile({

@@ -7,6 +7,7 @@ import { getConnectionId } from '@/lib/connection-context'
 import { isPathEqualOrDescendant } from './file-explorer-paths'
 import type { PendingDelete, TreeNode } from './file-explorer-types'
 import { requestEditorSaveQuiesce } from '@/components/editor/editor-autosave'
+import { commitFileExplorerOp } from './fileExplorerUndoRedo'
 
 type UseFileDeletionParams = {
   activeWorktreeId: string | null
@@ -91,6 +92,33 @@ export function useFileDeletion({
       await Promise.all(filesToClose.map((file) => requestEditorSaveQuiesce({ fileId: file.id })))
 
       const connectionId = getConnectionId(activeWorktreeId ?? null) ?? undefined
+      const parentDir = dirname(node.path)
+      if (!node.isDirectory) {
+        try {
+          const rf = await window.api.fs.readFile({ filePath: node.path, connectionId })
+          if (!rf.isBinary) {
+            const content = rf.content
+            commitFileExplorerOp({
+              undo: async () => {
+                await window.api.fs.writeFile({
+                  filePath: node.path,
+                  content,
+                  connectionId
+                })
+                await refreshDir(parentDir)
+              },
+              redo: async () => {
+                await window.api.fs.deletePath({ targetPath: node.path, connectionId })
+                await refreshDir(parentDir)
+              }
+            })
+          }
+        } catch {
+          // If we cannot read the file (race, permission), skip undo recording
+          // so a failed undo cannot restore stale content.
+        }
+      }
+
       await window.api.fs.deletePath({ targetPath: node.path, connectionId })
 
       for (const file of filesToClose) {
@@ -150,7 +178,7 @@ export function useFileDeletion({
     () => ({
       pendingDelete,
       isDeleting,
-      deleteShortcutLabel: isMac ? '⌘⌫' : 'Del',
+      deleteShortcutLabel: isMac ? '⌘⌫ / Del' : 'Del',
       deleteActionLabel,
       deleteDescription: getDeleteDescription(pendingDelete, isWindows),
       requestDelete,
