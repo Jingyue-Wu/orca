@@ -465,31 +465,40 @@ export const createBrowserSlice: StateCreator<AppState, [], [], BrowserSlice> = 
       }
     }))
 
-    const restored = get().createBrowserTab(worktreeId, entryToRestore.workspace.url, {
-      title: entryToRestore.workspace.title,
-      activate: true
+    const snap = entryToRestore.workspace
+    const pages = entryToRestore.pages
+    const sessionProfileId = snap.sessionProfileId ?? null
+
+    if (pages.length === 0) {
+      const restored = get().createBrowserTab(worktreeId, snap.url, {
+        title: snap.title,
+        activate: true,
+        sessionProfileId
+      })
+      return get().browserTabsByWorktree[worktreeId]?.find((tab) => tab.id === restored.id) ?? null
+    }
+
+    const leadPage =
+      pages.find((p) => p.id === snap.activePageId) ??
+      pages.find((p) => p.url === snap.url) ??
+      pages[0]
+
+    const restored = get().createBrowserTab(worktreeId, leadPage.url, {
+      title: leadPage.title,
+      activate: true,
+      sessionProfileId
     })
-    const restoredFirstPageId = restored.activePageId
-    const remainingPages = entryToRestore.pages.slice(1)
-    for (const page of remainingPages) {
-      get().createBrowserPage(restored.id, page.url, {
+
+    for (const p of pages) {
+      if (p.id === leadPage.id) {
+        continue
+      }
+      get().createBrowserPage(restored.id, p.url, {
         activate: false,
-        title: page.title
+        title: p.title
       })
     }
-    if (restoredFirstPageId) {
-      const restoredPages = get().browserPagesByWorkspace[restored.id] ?? []
-      const activeReplacement = restoredPages.find(
-        (page) => page.url === entryToRestore.workspace.url
-      )
-      const targetActivePage =
-        restoredPages.find((page) => page.title === entryToRestore.workspace.title) ??
-        activeReplacement ??
-        restoredPages[0]
-      if (targetActivePage) {
-        get().setActiveBrowserPage(restored.id, targetActivePage.id)
-      }
-    }
+
     return get().browserTabsByWorktree[worktreeId]?.find((tab) => tab.id === restored.id) ?? null
   },
 
