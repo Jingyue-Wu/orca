@@ -3,7 +3,7 @@ import type React from 'react'
 import { toast } from 'sonner'
 import { useAppStore } from '@/store'
 import { detectLanguage } from '@/lib/language-detect'
-import { dirname, joinPath } from '@/lib/path'
+import { basename, dirname, joinPath } from '@/lib/path'
 import { getConnectionId } from '@/lib/connection-context'
 import type { InlineInput } from './FileExplorerRow'
 import type { TreeNode } from './file-explorer-types'
@@ -121,6 +121,47 @@ export function useFileExplorerInlineInput({
         return
       }
       const run = async (): Promise<void> => {
+        const remapOpenTabsForRenamedPath = (fromPath: string, toPath: string): void => {
+          const state = useAppStore.getState()
+          const filesToMove = state.openFiles.filter((file) => {
+            if (file.filePath === fromPath) {
+              return true
+            }
+            return (
+              file.filePath.startsWith(`${fromPath}/`) || file.filePath.startsWith(`${fromPath}\\`)
+            )
+          })
+
+          for (const file of filesToMove) {
+            const oldFilePath = file.filePath
+            const suffix = oldFilePath.slice(fromPath.length)
+            const updatedPath = toPath + suffix
+            const updatedRelative = updatedPath.slice(worktreePath.length + 1)
+            const draft = state.editorDrafts[file.id]
+            const wasDirty = file.isDirty
+
+            state.closeFile(oldFilePath)
+            if (file.mode !== 'edit') {
+              continue
+            }
+
+            state.openFile({
+              filePath: updatedPath,
+              relativePath: updatedRelative,
+              worktreeId: file.worktreeId,
+              language: detectLanguage(basename(updatedPath)),
+              mode: 'edit'
+            })
+
+            if (draft !== undefined) {
+              state.setEditorDraft(updatedPath, draft)
+            }
+            if (wasDirty) {
+              state.markFileDirty(updatedPath, true)
+            }
+          }
+        }
+
         const connectionId = getConnectionId(activeWorktreeId ?? null) ?? undefined
         if (inlineInput.type === 'rename' && inlineInput.existingPath) {
           const parentDir = dirname(inlineInput.existingPath)
@@ -132,14 +173,17 @@ export function useFileExplorerInlineInput({
               newPath,
               connectionId
             })
+            remapOpenTabsForRenamedPath(oldPath, newPath)
             commitFileExplorerOp({
               undo: async () => {
                 await window.api.fs.rename({ oldPath: newPath, newPath: oldPath, connectionId })
                 await refreshDir(parentDir)
+                remapOpenTabsForRenamedPath(newPath, oldPath)
               },
               redo: async () => {
                 await window.api.fs.rename({ oldPath: oldPath, newPath: newPath, connectionId })
                 await refreshDir(parentDir)
+                remapOpenTabsForRenamedPath(oldPath, newPath)
               }
             })
           } catch (err) {
