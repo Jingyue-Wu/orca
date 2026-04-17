@@ -452,18 +452,27 @@ export const createBrowserSlice: StateCreator<AppState, [], [], BrowserSlice> = 
   },
 
   reopenClosedBrowserTab: (worktreeId) => {
-    const recentlyClosed = get().recentlyClosedBrowserTabsByWorktree[worktreeId] ?? []
-    const entryToRestore = recentlyClosed[0]
+    // Why: read and pop atomically inside set() to prevent a TOCTOU race
+    // where two rapid Cmd+Shift+T presses both restore the same entry.
+    let entryToRestore: ClosedBrowserWorkspaceSnapshot | undefined
+
+    set((s) => {
+      const recentlyClosed = s.recentlyClosedBrowserTabsByWorktree[worktreeId] ?? []
+      entryToRestore = recentlyClosed[0]
+      if (!entryToRestore) {
+        return s
+      }
+      return {
+        recentlyClosedBrowserTabsByWorktree: {
+          ...s.recentlyClosedBrowserTabsByWorktree,
+          [worktreeId]: recentlyClosed.slice(1)
+        }
+      }
+    })
+
     if (!entryToRestore) {
       return null
     }
-
-    set((s) => ({
-      recentlyClosedBrowserTabsByWorktree: {
-        ...s.recentlyClosedBrowserTabsByWorktree,
-        [worktreeId]: (s.recentlyClosedBrowserTabsByWorktree[worktreeId] ?? []).slice(1)
-      }
-    }))
 
     const snap = entryToRestore.workspace
     const pages = entryToRestore.pages
@@ -478,25 +487,32 @@ export const createBrowserSlice: StateCreator<AppState, [], [], BrowserSlice> = 
       return get().browserTabsByWorktree[worktreeId]?.find((tab) => tab.id === restored.id) ?? null
     }
 
-    const leadPage =
-      pages.find((p) => p.id === snap.activePageId) ??
-      pages.find((p) => p.url === snap.url) ??
-      pages[0]
-
-    const restored = get().createBrowserTab(worktreeId, leadPage.url, {
-      title: leadPage.title,
+    // Why: create the tab with the first page, then append the rest in
+    // original order so multi-page workspaces preserve their page sequence.
+    const [firstPage, ...restPages] = pages
+    const restored = get().createBrowserTab(worktreeId, firstPage.url, {
+      title: firstPage.title,
       activate: true,
       sessionProfileId
     })
 
-    for (const p of pages) {
-      if (p.id === leadPage.id) {
-        continue
-      }
+    for (const p of restPages) {
       get().createBrowserPage(restored.id, p.url, {
         activate: false,
         title: p.title
       })
+    }
+
+    // Activate the originally-active page if it wasn't the first one
+    const activePageId = snap.activePageId
+    if (activePageId) {
+      const restoredPages = get().browserPagesByWorkspace[restored.id] ?? []
+      const targetPage = restoredPages.find(
+        (p) => p.url === pages.find((orig) => orig.id === activePageId)?.url
+      )
+      if (targetPage && targetPage.id !== restoredPages[0]?.id) {
+        get().setActiveBrowserPage(restored.id, targetPage.id)
+      }
     }
 
     return get().browserTabsByWorktree[worktreeId]?.find((tab) => tab.id === restored.id) ?? null
@@ -668,18 +684,27 @@ export const createBrowserSlice: StateCreator<AppState, [], [], BrowserSlice> = 
   },
 
   reopenClosedBrowserPage: (workspaceId) => {
-    const recentlyClosed = get().recentlyClosedBrowserPagesByWorkspace[workspaceId] ?? []
-    const pageToRestore = recentlyClosed[0]
+    // Why: read and pop atomically inside set() to prevent a TOCTOU race
+    // where two rapid Cmd+Shift+T presses both restore the same page.
+    let pageToRestore: BrowserPage | undefined
+
+    set((s) => {
+      const recentlyClosed = s.recentlyClosedBrowserPagesByWorkspace[workspaceId] ?? []
+      pageToRestore = recentlyClosed[0]
+      if (!pageToRestore) {
+        return s
+      }
+      return {
+        recentlyClosedBrowserPagesByWorkspace: {
+          ...s.recentlyClosedBrowserPagesByWorkspace,
+          [workspaceId]: recentlyClosed.slice(1)
+        }
+      }
+    })
+
     if (!pageToRestore) {
       return null
     }
-
-    set((s) => ({
-      recentlyClosedBrowserPagesByWorkspace: {
-        ...s.recentlyClosedBrowserPagesByWorkspace,
-        [workspaceId]: (s.recentlyClosedBrowserPagesByWorkspace[workspaceId] ?? []).slice(1)
-      }
-    }))
 
     return get().createBrowserPage(workspaceId, pageToRestore.url, {
       title: pageToRestore.title,

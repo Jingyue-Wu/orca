@@ -7,6 +7,7 @@ import { basename, dirname, joinPath } from '@/lib/path'
 import { getConnectionId } from '@/lib/connection-context'
 import type { InlineInput } from './FileExplorerRow'
 import type { TreeNode } from './file-explorer-types'
+import { requestEditorSaveQuiesce } from '@/components/editor/editor-autosave'
 import { commitFileExplorerOp } from './fileExplorerUndoRedo'
 
 /**
@@ -167,6 +168,18 @@ export function useFileExplorerInlineInput({
           const parentDir = dirname(inlineInput.existingPath)
           const oldPath = inlineInput.existingPath
           const newPath = joinPath(parentDir, name)
+          // Why: a rename changes the file's path. Let any in-flight autosave
+          // finish first so a trailing write to the old path cannot recreate it.
+          const state = useAppStore.getState()
+          const filesToQuiesce = state.openFiles.filter(
+            (file) =>
+              file.filePath === oldPath ||
+              file.filePath.startsWith(`${oldPath}/`) ||
+              file.filePath.startsWith(`${oldPath}\\`)
+          )
+          await Promise.all(
+            filesToQuiesce.map((file) => requestEditorSaveQuiesce({ fileId: file.id }))
+          )
           try {
             await window.api.fs.rename({
               oldPath,

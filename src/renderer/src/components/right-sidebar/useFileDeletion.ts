@@ -93,25 +93,15 @@ export function useFileDeletion({
 
       const connectionId = getConnectionId(activeWorktreeId ?? null) ?? undefined
       const parentDir = dirname(node.path)
+      // Why: read file content before deleting so undo can restore it.
+      // We capture content first but only commit the undo entry after the
+      // delete succeeds — otherwise a failed delete would poison the stack.
+      let undoContent: string | undefined
       if (!node.isDirectory) {
         try {
           const rf = await window.api.fs.readFile({ filePath: node.path, connectionId })
           if (!rf.isBinary) {
-            const content = rf.content
-            commitFileExplorerOp({
-              undo: async () => {
-                await window.api.fs.writeFile({
-                  filePath: node.path,
-                  content,
-                  connectionId
-                })
-                await refreshDir(parentDir)
-              },
-              redo: async () => {
-                await window.api.fs.deletePath({ targetPath: node.path, connectionId })
-                await refreshDir(parentDir)
-              }
-            })
+            undoContent = rf.content
           }
         } catch {
           // If we cannot read the file (race, permission), skip undo recording
@@ -120,6 +110,23 @@ export function useFileDeletion({
       }
 
       await window.api.fs.deletePath({ targetPath: node.path, connectionId })
+
+      if (undoContent !== undefined) {
+        commitFileExplorerOp({
+          undo: async () => {
+            await window.api.fs.writeFile({
+              filePath: node.path,
+              content: undoContent,
+              connectionId
+            })
+            await refreshDir(parentDir)
+          },
+          redo: async () => {
+            await window.api.fs.deletePath({ targetPath: node.path, connectionId })
+            await refreshDir(parentDir)
+          }
+        })
+      }
 
       for (const file of filesToClose) {
         closeFile(file.id)
