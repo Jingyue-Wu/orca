@@ -261,6 +261,16 @@ describe('registerPtyHandlers', () => {
       expect(env.TERM_PROGRAM).toBe('Orca')
     })
 
+    it('surfaces ORCA_APP_VERSION as TERM_PROGRAM_VERSION for TUI feature gating', async () => {
+      const env = await spawnAndGetEnv(undefined, { ORCA_APP_VERSION: '1.2.3-test' })
+      expect(env.TERM_PROGRAM_VERSION).toBe('1.2.3-test')
+    })
+
+    it('falls back to a placeholder version when ORCA_APP_VERSION is unset', async () => {
+      const env = await spawnAndGetEnv(undefined, { ORCA_APP_VERSION: undefined })
+      expect(env.TERM_PROGRAM_VERSION).toBe('0.0.0-dev')
+    })
+
     it('injects the selected Codex home into Orca terminal PTYs', async () => {
       const env = await spawnAndGetEnv(undefined, undefined, () => '/tmp/orca-codex-home')
       expect(env.CODEX_HOME).toBe('/tmp/orca-codex-home')
@@ -442,6 +452,27 @@ describe('registerPtyHandlers', () => {
       expect(spawnMock).toHaveBeenCalledWith(
         'C:\\Program Files\\Git\\bin\\bash.exe',
         [],
+        expect.any(Object)
+      )
+    })
+
+    it('uses terminalWindowsShell setting over COMSPEC when provided', () => {
+      // Why: COMSPEC always points to cmd.exe on stock Windows, so without the
+      // setting the terminal would ignore the user's shell preference.
+      process.env.COMSPEC = 'C:\\Windows\\system32\\cmd.exe'
+
+      registerPtyHandlers(mainWindow as never, undefined, undefined, () => ({
+        terminalWindowsShell: 'powershell.exe'
+      } as never))
+      handlers.get('pty:spawn')!(null, { cols: 80, rows: 24 })
+
+      expect(spawnMock).toHaveBeenCalledWith(
+        'powershell.exe',
+        [
+          '-NoExit',
+          '-Command',
+          'try { . $PROFILE } catch {}; [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; [Console]::InputEncoding = [System.Text.Encoding]::UTF8'
+        ],
         expect.any(Object)
       )
     })

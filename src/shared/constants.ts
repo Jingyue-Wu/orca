@@ -120,12 +120,17 @@ export function getDefaultSettings(homedir: string): GlobalSettings {
     // box. Other platforms ignore this field because the UI never exposes it,
     // and Ctrl+right-click still opens the context menu when paste is enabled.
     terminalRightClickToPaste: true,
+    // Why: COMSPEC on a stock Windows machine always resolves to cmd.exe, so
+    // falling back to COMSPEC would silently open CMD instead of PowerShell.
+    // Defaulting to powershell.exe matches what users expect from a modern IDE.
+    terminalWindowsShell: 'powershell.exe',
     // Default false: opt-in only (matches Ghostty's default). Existing users
     // on upgrade inherit this default via persistence.ts's
     // { ...defaults.settings, ...parsed.settings } merge, so enabling
     // focus-follows-mouse never happens unexpectedly.
     terminalFocusFollowsMouse: false,
     terminalClipboardOnSelect: false,
+    terminalAllowOsc52Clipboard: false,
     setupScriptLaunchMode: 'new-tab',
     terminalScrollbackBytes: 10_000_000,
     openLinksInApp: true,
@@ -141,10 +146,23 @@ export function getDefaultSettings(homedir: string): GlobalSettings {
     defaultTuiAgent: null,
     skipDeleteWorktreeConfirm: false,
     defaultTaskViewPreset: 'all',
+    defaultRepoSelection: null,
     agentCmdOverrides: {},
-    terminalMacOptionAsAlt: 'true',
+    // Why: 'auto' runs a layout-aware probe at boot (see
+    // src/renderer/src/lib/keyboard-layout/*) that picks 'true' for US and
+    // US-International and 'false' for every other layout. This mirrors
+    // Ghostty's detectOptionAsAlt() and ensures users on Turkish, German,
+    // French, etc. can type Option+Q/L/E characters like @, €, [, ] out of
+    // the box (issue #903) while US users keep Option-as-Alt readline chords.
+    terminalMacOptionAsAlt: 'auto',
+    terminalMacOptionAsAltMigrated: false,
     experimentalTerminalDaemon: false,
-    experimentalTerminalDaemonNoticeShown: false
+    experimentalTerminalDaemonNoticeShown: false,
+    // Why: keep the historical default (on) so no existing user's terminal
+    // loses clickable-link emission on upgrade. Users with heavy zshrc setups
+    // can disable it from Settings → Terminal → Advanced to reclaim startup
+    // time.
+    terminalForceHyperlink: true
   }
 }
 

@@ -75,6 +75,11 @@ function triggerStartupMicrophoneRegistration(): void {
 }
 
 installUncaughtPipeErrorGuard()
+// Why: propagate the Orca app version into `process.env` so PTY-env
+// construction in both main (local-pty-provider) and the forked daemon
+// (pty-subprocess) can set `TERM_PROGRAM_VERSION` without re-importing
+// electron. The daemon inherits `process.env` via fork (daemon-init.ts:93).
+process.env.ORCA_APP_VERSION = app.getVersion()
 patchPackagedProcessPath()
 // Why: patchPackagedProcessPath seeds a minimal list of well-known system
 // dirs synchronously so early IPC (e.g. preflight before the shell spawn
