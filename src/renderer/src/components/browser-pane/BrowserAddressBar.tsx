@@ -131,6 +131,11 @@ export default function BrowserAddressBar({
     onChange(typed)
   }, [onChange])
 
+  const cancelSuggestionPreview = useCallback((): void => {
+    restoreTypedQuery()
+    setOpen(false)
+  }, [restoreTypedQuery])
+
   const selectedValue =
     selectedValueOverride &&
     suggestions.some((suggestion) => suggestion.url === selectedValueOverride)
@@ -170,9 +175,10 @@ export default function BrowserAddressBar({
       if (grace && inputRef.current && document.activeElement === inputRef.current) {
         return
       }
+      restoreTypedQuery()
       setOpen(false)
     }, 200)
-  }, [inputRef])
+  }, [inputRef, restoreTypedQuery])
 
   const handleSelect = useCallback(
     (url: string) => {
@@ -194,8 +200,7 @@ export default function BrowserAddressBar({
   const handleKeyDown = useCallback(
     (event: React.KeyboardEvent<HTMLInputElement>) => {
       if (event.key === 'Escape') {
-        restoreTypedQuery()
-        setOpen(false)
+        cancelSuggestionPreview()
         return
       }
 
@@ -250,6 +255,7 @@ export default function BrowserAddressBar({
       selectedValue,
       selectSuggestionAtIndex,
       restoreTypedQuery,
+      cancelSuggestionPreview,
       clearSuggestionPreview,
       onSubmit,
       value
@@ -266,9 +272,10 @@ export default function BrowserAddressBar({
       if (inputRef.current && document.activeElement === inputRef.current) {
         return
       }
+      restoreTypedQuery()
       setOpen(false)
     }
-  }, [open, suggestions.length, inputRef])
+  }, [open, suggestions.length, inputRef, restoreTypedQuery])
 
   return (
     <Popover
@@ -280,6 +287,9 @@ export default function BrowserAddressBar({
         // our handlers) or genuine outside dismissals.
         if (!next && inputRef.current && document.activeElement === inputRef.current) {
           return
+        }
+        if (!next) {
+          restoreTypedQuery()
         }
         setOpen(next)
       }}
