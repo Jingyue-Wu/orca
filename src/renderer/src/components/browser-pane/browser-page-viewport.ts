@@ -77,6 +77,8 @@ export function ensureBrowserPageViewport(
   shell.dataset.browserPageViewportId = browserPageId
   shell.className = 'absolute inset-0 flex min-h-0 flex-col'
   shell.style.display = 'none'
+  shell.inert = true
+  shell.setAttribute('aria-hidden', 'true')
 
   const chromeInset = document.createElement('div')
   chromeInset.dataset.browserPageChromeInset = ''
@@ -118,9 +120,15 @@ export function applyBrowserPageViewportLayout(
   if (!layout.paintable) {
     viewport.shell.style.display = 'none'
     viewport.shell.inert = true
+    viewport.shell.setAttribute('aria-hidden', 'true')
     return
   }
   viewport.shell.inert = !layout.active
+  if (layout.active) {
+    viewport.shell.removeAttribute('aria-hidden')
+  } else {
+    viewport.shell.setAttribute('aria-hidden', 'true')
+  }
   viewport.shell.style.display = 'flex'
   viewport.shell.style.opacity = layout.active ? '1' : '0'
   viewport.shell.style.pointerEvents = layout.active ? 'auto' : 'none'
@@ -139,5 +147,9 @@ export function parkBrowserPageViewport(browserPageId: string): void {
   const viewport = browserPageViewports.get(browserPageId)
   if (viewport) {
     viewport.shell.style.display = 'none'
+    viewport.shell.inert = true
+    viewport.shell.setAttribute('aria-hidden', 'true')
+    viewport.shell.style.pointerEvents = 'none'
+    viewport.shell.style.opacity = '0'
   }
 }

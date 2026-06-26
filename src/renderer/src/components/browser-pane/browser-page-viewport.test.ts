@@ -37,6 +37,8 @@ describe('ensureBrowserPageViewport', () => {
     expect(viewport).not.toBeNull()
     expect(viewport!.shell.parentElement).toBe(root)
     expect(viewport!.shell.style.display).toBe('none')
+    expect(viewport!.shell.inert).toBe(true)
+    expect(viewport!.shell.getAttribute('aria-hidden')).toBe('true')
     expect(viewport!.container.className).toContain('flex-1')
     expect(getBrowserPageViewportContainer('page-1')).toBe(viewport!.container)
   })
@@ -62,9 +64,18 @@ describe('applyBrowserPageViewportLayout', () => {
     mountSlotViewport('workspace-1')
     ensureBrowserPageViewport('page-1', 'workspace-1')
     applyBrowserPageViewportLayout('page-1', { paintable: true, active: true })
+    let viewport = ensureBrowserPageViewport('page-1', 'workspace-1')!
+
+    expect(viewport.shell.style.display).toBe('flex')
+    expect(viewport.shell.inert).toBe(false)
+    expect(viewport.shell.getAttribute('aria-hidden')).toBeNull()
+
     parkBrowserPageViewport('page-1')
 
-    const viewport = ensureBrowserPageViewport('page-1', 'workspace-1')!
+    viewport = ensureBrowserPageViewport('page-1', 'workspace-1')!
     expect(viewport.shell.style.display).toBe('none')
+    expect(viewport.shell.inert).toBe(true)
+    expect(viewport.shell.getAttribute('aria-hidden')).toBe('true')
+    expect(viewport.shell.style.pointerEvents).toBe('none')
   })
 })

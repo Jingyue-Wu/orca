@@ -122,11 +122,7 @@ const BrowserOverlaySlot = memo(function BrowserOverlaySlot({
       onPointerDown={handleFocus}
       onFocusCapture={handleFocus}
     >
-      <div
-        ref={setSlotViewportRef}
-        className="absolute inset-0 flex min-h-0 flex-col"
-        aria-hidden
-      />
+      <div ref={setSlotViewportRef} className="absolute inset-0 flex min-h-0 flex-col" />
       {/* Why: moving an Electron webview between DOM parents destroys the guest
           document in some Electron builds. Visible worktree browsers stay in
           stable overlay slots; hidden worktrees park the heavy pane subtree. */}

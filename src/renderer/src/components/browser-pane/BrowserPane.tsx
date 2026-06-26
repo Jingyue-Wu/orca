@@ -2677,6 +2677,13 @@ function BrowserPagePane({
   const grabToastTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined)
   const annotationCopyTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined)
   const browserZoomFeedbackTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined)
+  useEffect(() => {
+    return () => {
+      clearTimeout(grabToastTimerRef.current)
+      clearTimeout(annotationCopyTimerRef.current)
+      clearTimeout(browserZoomFeedbackTimerRef.current)
+    }
+  }, [])
   const [slotViewportReady, setSlotViewportReady] = useState(
     () => getBrowserOverlaySlotViewport(workspaceId) !== null
   )
@@ -3574,6 +3581,17 @@ function BrowserPagePane({
     if (webview && webview.parentElement !== container) {
       // Why: moving an Electron webview between DOM parents can recreate the
       // guest document. Treat unexpected parent drift as stale state instead.
+      destroyPersistentWebview(browserTab.id)
+      webview = undefined
+      container = ensureBrowserPageViewport(browserTab.id, workspaceId)?.container ?? null
+      if (!container) {
+        return
+      }
+    }
+    if (webview && webview.getAttribute('partition') !== webviewPartition) {
+      // Why: Electron partitions are immutable after creation. If restored state
+      // or another store path changes the profile, the persisted guest must be
+      // replaced rather than parked/reused with the stale session.
       destroyPersistentWebview(browserTab.id)
       webview = undefined
       container = ensureBrowserPageViewport(browserTab.id, workspaceId)?.container ?? null
