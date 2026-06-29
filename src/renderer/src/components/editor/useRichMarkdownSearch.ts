@@ -6,6 +6,7 @@ import { getShortcutPlatform } from '@/lib/shortcut-platform'
 import { useAppStore } from '@/store'
 import {
   isMarkdownPreviewFindShortcut,
+  isMarkdownPreviewReplaceShortcut,
   isMarkdownPreviewSearchQueryTooLarge
 } from './markdown-preview-search'
 import {
@@ -80,6 +81,16 @@ export function useRichMarkdownSearch({
   const openSearch = useCallback(() => {
     if (isSearchOpen) {
       // Why: same-value setState is a no-op so the focus effect won't re-fire.
+      searchInputRef.current?.focus()
+      searchInputRef.current?.select()
+    } else {
+      setIsSearchOpen(true)
+    }
+  }, [isSearchOpen])
+
+  const openReplace = useCallback(() => {
+    setIsReplaceMode(true)
+    if (isSearchOpen) {
       searchInputRef.current?.focus()
       searchInputRef.current?.select()
     } else {
@@ -270,6 +281,16 @@ export function useRichMarkdownSearch({
       }
 
       if (
+        isMarkdownPreviewReplaceShortcut(event, getShortcutPlatform(), keybindings) &&
+        targetInsideEditor
+      ) {
+        event.preventDefault()
+        event.stopPropagation()
+        openReplace()
+        return
+      }
+
+      if (
         event.key === 'Escape' &&
         isSearchOpen &&
         (targetInsideEditor || target === searchInputRef.current)
@@ -282,7 +303,7 @@ export function useRichMarkdownSearch({
 
     window.addEventListener('keydown', handleKeyDown, { capture: true })
     return () => window.removeEventListener('keydown', handleKeyDown, { capture: true })
-  }, [closeSearch, isSearchOpen, keybindings, openSearch, rootRef])
+  }, [closeSearch, isSearchOpen, keybindings, openReplace, openSearch, rootRef])
 
   return {
     openSearch,

@@ -18,6 +18,14 @@ export function isMarkdownPreviewFindShortcut(
   return keybindingMatchesAction('editor.find', event, platform, keybindings)
 }
 
+export function isMarkdownPreviewReplaceShortcut(
+  event: Pick<KeyboardEvent, 'key' | 'code' | 'metaKey' | 'ctrlKey' | 'altKey' | 'shiftKey'>,
+  platform: NodeJS.Platform,
+  keybindings?: KeybindingOverrides
+): boolean {
+  return keybindingMatchesAction('editor.replace', event, platform, keybindings)
+}
+
 export type TextMatchOptions = {
   matchCase?: boolean
   wholeWord?: boolean

@@ -12,6 +12,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { translate } from '@/i18n/i18n'
+import { useOptionalShortcutLabel } from '@/hooks/useShortcutLabel'
 
 type RichMarkdownSearchBarProps = {
   activeMatchIndex: number
@@ -54,6 +55,10 @@ export function RichMarkdownSearchBar({
   onToggleReplaceMode,
   onToggleWholeWord
 }: RichMarkdownSearchBarProps): React.JSX.Element | null {
+  // Why: surface the same replace shortcut the source editor uses so the toggle
+  // is discoverable; reads the user's effective binding, formatted per platform.
+  const replaceShortcut = useOptionalShortcutLabel('editor.replace')
+
   if (!isOpen) {
     return null
   }
@@ -66,6 +71,12 @@ export function RichMarkdownSearchBar({
   }
 
   const noMatches = matchCount === 0
+  const toggleReplaceLabel = isReplaceMode
+    ? translate('auto.components.editor.RichMarkdownSearchBar.hideReplace', 'Hide replace')
+    : translate('auto.components.editor.RichMarkdownSearchBar.showReplace', 'Toggle replace')
+  const toggleReplaceTitle = replaceShortcut
+    ? `${toggleReplaceLabel} (${replaceShortcut})`
+    : toggleReplaceLabel
 
   return (
     <div className="rich-markdown-search" onKeyDown={(event) => event.stopPropagation()}>
@@ -75,14 +86,7 @@ export function RichMarkdownSearchBar({
         size="icon-xs"
         onMouseDown={keepSearchFocus}
         onClick={onToggleReplaceMode}
-        title={
-          isReplaceMode
-            ? translate('auto.components.editor.RichMarkdownSearchBar.hideReplace', 'Hide replace')
-            : translate(
-                'auto.components.editor.RichMarkdownSearchBar.showReplace',
-                'Toggle replace'
-              )
-        }
+        title={toggleReplaceTitle}
         aria-label={translate(
           'auto.components.editor.RichMarkdownSearchBar.toggleReplace',
           'Toggle replace'
