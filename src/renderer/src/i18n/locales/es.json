@@ -10960,7 +10960,16 @@
           "32ae8d7d57": "Partido anterior",
           "158c645829": "Buscar en el editor de markdowns enriquecido",
           "98b89276f3": "Buscar en editor enriquecido",
-          "a86958d508": "Sin resultados"
+          "a86958d508": "Sin resultados",
+          "hideReplace": "Hide replace",
+          "showReplace": "Toggle replace",
+          "toggleReplace": "Toggle replace",
+          "matchCase": "Match case",
+          "wholeWord": "Match whole word",
+          "replacePlaceholder": "Replace",
+          "replaceAria": "Replace in rich markdown editor",
+          "replaceOne": "Replace",
+          "replaceAll": "Replace all"
         },
         "RichMarkdownSlashMenu": {
           "82c6816ff8": "No se encontraron bloques",

@@ -26,7 +26,13 @@ export function useRichMarkdownSearch({
   const searchInputRef = useRef<HTMLInputElement | null>(null)
   const keybindings = useAppStore((state) => state.keybindings)
   const [isSearchOpen, setIsSearchOpen] = useState(false)
+  const [isReplaceMode, setIsReplaceMode] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
+  const [replaceQuery, setReplaceQuery] = useState('')
+  // Why: match-case / whole-word persist across find sessions (matching the
+  // source editor's find widget), so they live outside the close-reset path.
+  const [matchCase, setMatchCase] = useState(false)
+  const [wholeWord, setWholeWord] = useState(false)
   const [rawActiveMatchIndex, setRawActiveMatchIndex] = useState(-1)
   const [searchRevision, setSearchRevision] = useState(0)
   // Why: debouncing the query that drives match computation prevents the
@@ -50,10 +56,13 @@ export function useRichMarkdownSearch({
     if (!editor || !isSearchOpen || !searchRequestQuery) {
       return []
     }
-    return findRichMarkdownSearchMatches(editor.state.doc, searchRequestQuery)
+    return findRichMarkdownSearchMatches(editor.state.doc, searchRequestQuery, {
+      matchCase,
+      wholeWord
+    })
     // searchRevision is bumped on ProseMirror doc edits to trigger recomputation
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editor, isSearchOpen, searchRequestQuery, searchRevision])
+  }, [editor, isSearchOpen, searchRequestQuery, searchRevision, matchCase, wholeWord])
 
   const matchCount = matches.length
 
@@ -80,10 +89,65 @@ export function useRichMarkdownSearch({
 
   const closeSearch = useCallback(() => {
     setIsSearchOpen(false)
+    setIsReplaceMode(false)
     setSearchQuery('')
+    setReplaceQuery('')
     setDebouncedQuery('')
     setRawActiveMatchIndex(-1)
   }, [])
+
+  const toggleMatchCase = useCallback(() => setMatchCase((value) => !value), [])
+  const toggleWholeWord = useCallback(() => setWholeWord((value) => !value), [])
+  const toggleReplaceMode = useCallback(() => setIsReplaceMode((value) => !value), [])
+
+  const replaceRange = useCallback(
+    (from: number, to: number) => {
+      if (!editor) {
+        return
+      }
+      const tr = editor.state.tr
+      // Why: empty replacement must delete the range — ProseMirror text nodes
+      // can't hold an empty string, so insertText('') would be a no-op.
+      if (replaceQuery) {
+        tr.insertText(replaceQuery, from, to)
+      } else {
+        tr.delete(from, to)
+      }
+      editor.view.dispatch(tr)
+    },
+    [editor, replaceQuery]
+  )
+
+  const replaceCurrentMatch = useCallback(() => {
+    if (matchCount === 0) {
+      return
+    }
+    const match = matches[activeMatchIndex]
+    if (!match) {
+      return
+    }
+    // Why: removing the active match shifts the next match into the same index,
+    // so leaving rawActiveMatchIndex untouched advances to it after recompute.
+    replaceRange(match.from, match.to)
+  }, [activeMatchIndex, matchCount, matches, replaceRange])
+
+  const replaceAllMatches = useCallback(() => {
+    if (!editor || matches.length === 0) {
+      return
+    }
+    const tr = editor.state.tr
+    // Why: process matches last-to-first so each edit can't invalidate the
+    // positions of matches we haven't replaced yet, keeping it a single undo.
+    for (let index = matches.length - 1; index >= 0; index -= 1) {
+      const match = matches[index]
+      if (replaceQuery) {
+        tr.insertText(replaceQuery, match.from, match.to)
+      } else {
+        tr.delete(match.from, match.to)
+      }
+    }
+    editor.view.dispatch(tr)
+  }, [editor, matches, replaceQuery])
 
   const moveToMatch = useCallback(
     (direction: 1 | -1) => {
@@ -221,14 +285,28 @@ export function useRichMarkdownSearch({
   }, [closeSearch, isSearchOpen, keybindings, openSearch, rootRef])
 
   return {
-    activeMatchIndex,
-    closeSearch,
-    isSearchOpen,
-    matchCount,
-    moveToMatch,
     openSearch,
-    searchInputRef,
-    searchQuery,
-    setSearchQuery
+    searchState: {
+      activeMatchIndex,
+      isReplaceMode,
+      isSearchOpen,
+      matchCase,
+      matchCount,
+      replaceQuery,
+      searchQuery,
+      searchInputRef,
+      wholeWord
+    },
+    searchActions: {
+      closeSearch,
+      moveToMatch,
+      replaceAllMatches,
+      replaceCurrentMatch,
+      setReplaceQuery,
+      setSearchQuery,
+      toggleMatchCase,
+      toggleReplaceMode,
+      toggleWholeWord
+    }
   }
 }

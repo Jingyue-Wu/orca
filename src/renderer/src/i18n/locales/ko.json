@@ -10960,7 +10960,16 @@
           "32ae8d7d57": "이전 일치 항목",
           "158c645829": "리치 markdown 편집기에서 찾기",
           "98b89276f3": "리치 에디터에서 찾기",
-          "a86958d508": "결과 없음"
+          "a86958d508": "결과 없음",
+          "hideReplace": "Hide replace",
+          "showReplace": "Toggle replace",
+          "toggleReplace": "Toggle replace",
+          "matchCase": "Match case",
+          "wholeWord": "Match whole word",
+          "replacePlaceholder": "Replace",
+          "replaceAria": "Replace in rich markdown editor",
+          "replaceOne": "Replace",
+          "replaceAll": "Replace all"
         },
         "RichMarkdownSlashMenu": {
           "82c6816ff8": "블록을 찾을 수 없습니다.",

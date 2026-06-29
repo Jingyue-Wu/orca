@@ -10960,7 +10960,16 @@
           "32ae8d7d57": "前の一致",
           "158c645829": "リッチ markdown エディタで検索",
           "98b89276f3": "リッチエディターで検索",
-          "a86958d508": "結果はありません"
+          "a86958d508": "結果はありません",
+          "hideReplace": "Hide replace",
+          "showReplace": "Toggle replace",
+          "toggleReplace": "Toggle replace",
+          "matchCase": "Match case",
+          "wholeWord": "Match whole word",
+          "replacePlaceholder": "Replace",
+          "replaceAria": "Replace in rich markdown editor",
+          "replaceOne": "Replace",
+          "replaceAll": "Replace all"
         },
         "RichMarkdownSlashMenu": {
           "82c6816ff8": "ブロックが見つかりませんでした",
