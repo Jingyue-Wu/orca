@@ -3,6 +3,7 @@ import {
   MARKDOWN_PREVIEW_SEARCH_QUERY_MAX_BYTES,
   findTextMatchRanges,
   isMarkdownPreviewFindShortcut,
+  isMarkdownPreviewReplaceShortcut,
   isMarkdownPreviewSearchQueryTooLarge
 } from './markdown-preview-search'
 
@@ -66,6 +67,66 @@ describe('isMarkdownPreviewFindShortcut', () => {
   })
 })
 
+describe('isMarkdownPreviewReplaceShortcut', () => {
+  it('uses Cmd+Option+F on macOS', () => {
+    expect(
+      isMarkdownPreviewReplaceShortcut(
+        {
+          key: 'f',
+          code: 'KeyF',
+          metaKey: true,
+          ctrlKey: false,
+          altKey: true,
+          shiftKey: false
+        },
+        'darwin'
+      )
+    ).toBe(true)
+    expect(
+      isMarkdownPreviewReplaceShortcut(
+        {
+          key: 'h',
+          code: 'KeyH',
+          metaKey: false,
+          ctrlKey: true,
+          altKey: false,
+          shiftKey: false
+        },
+        'darwin'
+      )
+    ).toBe(false)
+  })
+
+  it('uses Ctrl+H on non-macOS platforms', () => {
+    expect(
+      isMarkdownPreviewReplaceShortcut(
+        {
+          key: 'h',
+          code: 'KeyH',
+          metaKey: false,
+          ctrlKey: true,
+          altKey: false,
+          shiftKey: false
+        },
+        'linux'
+      )
+    ).toBe(true)
+    expect(
+      isMarkdownPreviewReplaceShortcut(
+        {
+          key: 'f',
+          code: 'KeyF',
+          metaKey: true,
+          ctrlKey: false,
+          altKey: true,
+          shiftKey: false
+        },
+        'linux'
+      )
+    ).toBe(false)
+  })
+})
+
 describe('findTextMatchRanges', () => {
   it('finds case-insensitive literal matches', () => {
     expect(findTextMatchRanges('Alpha beta ALPHA', 'alpha')).toEqual([
@@ -107,6 +168,12 @@ describe('findTextMatchRanges', () => {
       { start: 0, end: 2 },
       { start: 9, end: 11 }
     ])
+  })
+
+  it('checks whole-word boundaries around astral letters by code point', () => {
+    const text = '𐐀cat cat𐐀 cat'
+
+    expect(findTextMatchRanges(text, 'cat', { wholeWord: true })).toEqual([{ start: 12, end: 15 }])
   })
 
   it('combines matchCase and wholeWord constraints', () => {

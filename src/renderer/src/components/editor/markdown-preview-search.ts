@@ -109,9 +109,33 @@ function isWordCharacter(char: string | undefined): boolean {
   return char !== undefined && WORD_CHARACTER.test(char)
 }
 
+function codePointBefore(text: string, index: number): string | undefined {
+  if (index <= 0) {
+    return undefined
+  }
+
+  const previousCodeUnit = text.charCodeAt(index - 1)
+  if (
+    previousCodeUnit >= 0xdc00 &&
+    previousCodeUnit <= 0xdfff &&
+    index > 1 &&
+    text.charCodeAt(index - 2) >= 0xd800 &&
+    text.charCodeAt(index - 2) <= 0xdbff
+  ) {
+    return text.slice(index - 2, index)
+  }
+
+  return text[index - 1]
+}
+
+function codePointAt(text: string, index: number): string | undefined {
+  const codePoint = text.codePointAt(index)
+  return codePoint === undefined ? undefined : String.fromCodePoint(codePoint)
+}
+
 function isWholeWordMatch(text: string, start: number, end: number): boolean {
-  const before = start > 0 ? text[start - 1] : undefined
-  const after = end < text.length ? text[end] : undefined
+  const before = codePointBefore(text, start)
+  const after = codePointAt(text, end)
   return !isWordCharacter(before) && !isWordCharacter(after)
 }
 

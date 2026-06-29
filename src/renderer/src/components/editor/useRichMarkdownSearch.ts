@@ -67,6 +67,23 @@ export function useRichMarkdownSearch({
 
   const matchCount = matches.length
 
+  const getLiveMatches = useCallback(() => {
+    if (
+      !editor ||
+      !isSearchOpen ||
+      !searchQuery ||
+      isMarkdownPreviewSearchQueryTooLarge(searchQuery)
+    ) {
+      return []
+    }
+    // Why: replace mutates document ranges immediately, so it must use the
+    // current input value instead of the debounced highlight match set.
+    return findRichMarkdownSearchMatches(editor.state.doc, searchQuery, {
+      matchCase,
+      wholeWord
+    })
+  }, [editor, isSearchOpen, matchCase, searchQuery, wholeWord])
+
   // Clamp the user-controlled index to the valid range on every render.
   // No state update needed — this is a pure derivation.
   const activeMatchIndex =
@@ -136,27 +153,34 @@ export function useRichMarkdownSearch({
   )
 
   const replaceCurrentMatch = useCallback(() => {
-    if (matchCount === 0) {
+    const liveMatches = getLiveMatches()
+    if (liveMatches.length === 0) {
       return
     }
-    const match = matches[activeMatchIndex]
+    const liveActiveMatchIndex =
+      activeMatchIndex >= 0 && activeMatchIndex < liveMatches.length ? activeMatchIndex : 0
+    const match = liveMatches[liveActiveMatchIndex]
     if (!match) {
       return
     }
     // Why: removing the active match shifts the next match into the same index,
     // so leaving rawActiveMatchIndex untouched advances to it after recompute.
     replaceRange(match.from, match.to)
-  }, [activeMatchIndex, matchCount, matches, replaceRange])
+  }, [activeMatchIndex, getLiveMatches, replaceRange])
 
   const replaceAllMatches = useCallback(() => {
-    if (!editor || matches.length === 0) {
+    if (!editor) {
+      return
+    }
+    const liveMatches = getLiveMatches()
+    if (liveMatches.length === 0) {
       return
     }
     const tr = editor.state.tr
     // Why: process matches last-to-first so each edit can't invalidate the
     // positions of matches we haven't replaced yet, keeping it a single undo.
-    for (let index = matches.length - 1; index >= 0; index -= 1) {
-      const match = matches[index]
+    for (let index = liveMatches.length - 1; index >= 0; index -= 1) {
+      const match = liveMatches[index]
       if (replaceQuery) {
         tr.insertText(replaceQuery, match.from, match.to)
       } else {
@@ -164,7 +188,7 @@ export function useRichMarkdownSearch({
       }
     }
     editor.view.dispatch(tr)
-  }, [editor, matches, replaceQuery])
+  }, [editor, getLiveMatches, replaceQuery])
 
   const moveToMatch = useCallback(
     (direction: 1 | -1) => {
