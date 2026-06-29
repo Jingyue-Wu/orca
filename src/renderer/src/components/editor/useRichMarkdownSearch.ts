@@ -105,7 +105,13 @@ export function useRichMarkdownSearch({
     setReplaceQuery('')
     setDebouncedQuery('')
     setRawActiveMatchIndex(-1)
-  }, [])
+    // Why: closing the bar unmounts the focused search input, dropping focus to
+    // <body> — outside the editor root — so the find/replace shortcut's
+    // targetInsideEditor guard would ignore the next keypress until the user
+    // re-clicks the editor. Returning focus to the editor keeps reopening via
+    // keyboard working and restores the caret to the document.
+    editor?.commands.focus()
+  }, [editor])
 
   const toggleMatchCase = useCallback(() => setMatchCase((value) => !value), [])
   const toggleWholeWord = useCallback(() => setWholeWord((value) => !value), [])
