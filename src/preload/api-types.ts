@@ -2853,6 +2853,7 @@ export type PreloadApi = {
     onFindInBrowserPage: (callback: () => void) => () => void
     onReloadBrowserPage: (callback: () => void) => () => void
     onBrowserHistoryNavigate: (callback: (direction: 'back' | 'forward') => void) => () => void
+    onTabHistoryNavigate: (callback: (direction: 'back' | 'forward') => void) => () => void
     onZoomBrowserPage: (callback: (direction: 'in' | 'out' | 'reset') => void) => () => void
     onHardReloadBrowserPage: (callback: () => void) => () => void
     onCloseActiveTab: (callback: () => void) => () => void
